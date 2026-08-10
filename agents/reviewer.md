@@ -1,7 +1,7 @@
 ---
 name: reviewer
 description: Independent code-review agent — the review gate of the fable-gpt workflow. Reviews diffs produced by Codex and returns conclusions only (verdict + issue list with file:line evidence), never large dumps.
-model: claude-opus-4-8[1m]
+model: opus
 tools: Read, Grep, Glob, Bash
 ---
 
