@@ -102,7 +102,12 @@ cd <project-dir> && ~/.claude/skills/fable-gpt/driver.sh run ~/.claude/fable-gpt
    prints `[driver] job-id: <id>`, then watches the job — streaming the
    companion log into `<brief minus .md>.result.md` in real time (append mode,
    one `===== fable-gpt run <timestamp> =====` header per run) and finishing
-   with the final assistant reply as the **last stdout lines**. Completion
+   with the final assistant reply as the **last stdout lines** (stdout only:
+   the companion log records the reply twice — as the last `Assistant
+   message` entry and again under `Final output` — so in the `.result.md`
+   the driver truncates the `Final output` repeat and appends just its
+   `[driver] job ... finished` verdict line; the file keeps a single copy
+   of the reply). Completion
    notifies automatically — no polling. Exit codes: 0 = clean completion with
    a final reply; 1 = job failed; 2 = watcher lost the job (worker may still
    run — re-attach); **3 = suspected false completion** (job marked completed
@@ -174,6 +179,10 @@ Do your best to find reasons to REJECT the current change. Look only at
 uncommitted working-tree changes (git diff / untracked files).
 Output an issue list by severity (blocker / major / minor); if none, say
 explicitly "no blockers found".
+Only report TRUE issues reachable in realistic usage: before listing one,
+confirm the triggering input/state actually occurs in normal use. Do not
+report speculative extreme-edge-case findings or demand over-defensive
+hardening against conditions that won't happen in practice.
 
 ## Original task brief
 <full text>
@@ -189,7 +198,10 @@ explicitly "no blockers found".
    dispatch a Codex fix task (may `--resume` the implementation thread, now
    with `--write`), then re-run the failed check(s); all green = done. Codex's
    review verdict is decision input, not a pass stamp — "never trust Codex
-   blindly" applies to its self-review too.
+   blindly" applies to its self-review too. Filter reviewer findings for
+   practicality: an issue only counts (at any severity) if its triggering
+   input/state occurs in realistic use — drop extreme-edge-case /
+   over-defensive findings rather than dispatching fixes for them.
 
 ## Orchestration rules: the main agent dispatches, never executes
 

@@ -86,7 +86,7 @@ EOF
 # final result. Exit: 0 ok, 1 failed, 2 lost track of job, 3 suspected false
 # completion.
 watch_job() {
-  local job_id="$1" result_file="$2"
+  local job_id="$1" result_file="$2" skip_existing="${3:-0}"
   local log_file="" copied=0 status="" misses=0 snap size
 
   while :; do
@@ -95,6 +95,14 @@ watch_job() {
       log_file=$(printf '%s' "$snap" | python3 -c 'import json,sys
 try: print((json.load(sys.stdin).get("job") or {}).get("logFile") or "")
 except Exception: print("")')
+      # Re-attached watchers (skip_existing=1) stream only NEW log bytes —
+      # re-copying from byte 0 would duplicate everything the first watcher
+      # already wrote into the result file. Any gap stays recoverable from
+      # the companion log itself, and the final reply is guaranteed by the
+      # render step below.
+      if [[ "$skip_existing" == "1" && -n "$log_file" && -f "$log_file" ]]; then
+        copied=$(wc -c < "$log_file" | tr -d ' ')
+      fi
     fi
     if [[ -n "$log_file" && -f "$log_file" ]]; then
       size=$(wc -c < "$log_file" | tr -d ' ')
@@ -125,34 +133,83 @@ except Exception: print("unknown")')
   done
 
   # Final verdict + final reply last on stdout (the notification tail must end
-  # with the assistant's reply, not a progress line).
+  # with the assistant's reply, not a progress line). The result file is NOT a
+  # tee of this: the streamed companion log records the reply twice (last
+  # "Assistant message" entry + "Final output" section) — the python below
+  # truncates the "Final output" repeat (strict pattern match only), appends
+  # just the [driver] lines, and re-appends the reply only if the stream
+  # missed it entirely.
   node "$companion" result "$job_id" --json 2>/dev/null | python3 -c '
-import json, sys
+import json, re, sys
+
+result_path = sys.argv[1]
+stdout_lines = []
+file_lines = []
+
+def emit(text, to_file=True):
+    stdout_lines.append(text)
+    if to_file:
+        file_lines.append(text)
+
+def flush(code):
+    print("\n".join(stdout_lines))
+    if file_lines:
+        with open(result_path, "a") as f:
+            f.write("\n".join(file_lines) + "\n")
+    sys.exit(code)
+
 try:
     d = json.load(sys.stdin)
 except Exception:
-    print("[driver] WARNING: could not read job result; verify with `driver.sh status --json`")
-    sys.exit(3)
+    emit("[driver] WARNING: could not read job result; verify with `driver.sh status --json`")
+    flush(3)
+
 job = d.get("job") or {}
 stored = d.get("storedJob") or {}
 res = stored.get("result") or {}
 raw = (res.get("rawOutput") or "").strip()
 status = job.get("status") or "unknown"
 thread = res.get("threadId") or stored.get("threadId") or job.get("threadId") or "?"
-print("[driver] job %s finished: status=%s thread=%s" % (job.get("id", "?"), status, thread))
+emit("[driver] job %s finished: status=%s thread=%s" % (job.get("id", "?"), status, thread))
 err = stored.get("errorMessage") or ""
 if err:
-    print("[driver] job error: " + err)
+    emit("[driver] job error: " + err)
 if raw:
-    print(raw)
+    raw_b = raw.encode("utf-8")
+    in_file = False
+    try:
+        with open(result_path, "rb") as f:
+            f.seek(0, 2)
+            size = f.tell()
+            window = min(size, 2 * len(raw_b) + 16384)
+            f.seek(size - window)
+            tail = f.read()
+        j = tail.rfind(raw_b)
+        in_file = j >= 0
+        i = tail.rfind(raw_b, 0, j) if j >= 0 else -1
+        if i >= 0:
+            # Between the two copies the log emits only bracketed status
+            # lines ("[ts] Turn completed." / "[ts] Turn completion
+            # inferred..." — wording varies) and then the "[ts] Final
+            # output" marker. Keep the status lines, drop the marker and
+            # the repeated reply after it.
+            m = re.fullmatch(
+                rb"((?:\s*\[[^\]\n]*\][^\n]*\n)*?\s*)\[[^\]\n]*\] Final output[^\n]*\n",
+                tail[i + len(raw_b):j])
+            if m and not tail[j + len(raw_b):].strip():
+                with open(result_path, "r+b") as f:
+                    f.truncate(size - window + i + len(raw_b) + m.end(1))
+    except Exception:
+        pass
+    emit(raw, to_file=not in_file)
 if status == "completed" and raw:
-    sys.exit(0)
+    flush(0)
 if status == "completed":
-    print("[driver] WARNING: suspected FALSE COMPLETION — job marked completed but no final reply captured. Verify with `driver.sh status --json`, then continue the thread: driver.sh run <new-brief> --resume --write")
-    sys.exit(3)
-print("[driver] job did not complete cleanly (status=%s)" % status)
-sys.exit(1)
-' | tee -a "$result_file"
+    emit("[driver] WARNING: suspected FALSE COMPLETION — job marked completed but no final reply captured. Verify with `driver.sh status --json`, then continue the thread: driver.sh run <new-brief> --resume --write")
+    flush(3)
+emit("[driver] job did not complete cleanly (status=%s)" % status)
+flush(1)
+' "$result_file"
 }
 
 if [[ "$1" == "run" ]]; then
@@ -222,8 +279,8 @@ elif [[ "$1" == "watch" ]]; then
     echo "no job id given and none recorded in $result_file" >&2
     exit 1
   fi
-  echo "[driver] re-attaching watcher to job $job_id" | tee -a "$result_file"
-  watch_job "$job_id" "$result_file"
+  echo "[driver] re-attaching watcher to job $job_id (streaming new log bytes only)" | tee -a "$result_file"
+  watch_job "$job_id" "$result_file" 1
 else
   exec node "$companion" "$@"
 fi
