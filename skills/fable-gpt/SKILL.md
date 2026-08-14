@@ -1,6 +1,6 @@
 ---
 name: fable-gpt
-description: Fable-GPT orchestration workflow — the main agent (Fable) only dispatches and adjudicates; heavy implementation/debugging/refactoring goes to Codex (gpt-5.6-sol); exploration/review/gate re-runs go to tiered Claude subagents. Use when orchestrating multi-agent work; when delegating implementation, debugging, refactoring, or test-fixing to Codex; when launching, resuming, monitoring, or cancelling a codex-companion task; or when the user says use Codex / run a Codex task / Fable-GPT.
+description: Fable-GPT orchestration workflow — the main agent (Fable) only dispatches and adjudicates; heavy implementation/debugging/refactoring goes to Codex (gpt-5.6-sol); exploration/review/gate re-runs go to tiered Claude subagents. Use when orchestrating multi-agent work; when delegating implementation, debugging, refactoring, or test-fixing to Codex; when launching, resuming, monitoring, or cancelling a codex-companion task; or when the user says use Codex / run a Codex task / Fable-GPT. Also covers program-scale campaigns (scope manifest, risk-ordered waves, wave gates, inventory approval for irreversible steps, docs closeout).
 ---
 
 # Fable-GPT: Fable orchestrates, Codex executes
@@ -78,6 +78,14 @@ re-attach with `driver.sh watch`).
    - **Keep briefs lean**: gpt-5.6-sol requests over 272K input tokens bill 2×
      input / 1.5× output *for the entire request*. The 1M window is for
      Codex's own exploration, not for stuffing repo context into the brief.
+   - **End every brief with the standing escalation clause** (verbatim):
+     "If reality contradicts this brief — a file doesn't exist, a dependency
+     the brief assumes is absent, the described approach can't work — stop and
+     report the contradiction. Do not improvise a different approach and do
+     not expand scope. The brief (and the manifest, if one exists) is
+     authoritative; corrections come from the orchestrator." Without it, Codex
+     with a 1M window and `--write` improvises a redesign rather than
+     stopping — a known source of multi-round fix churn.
 
 2. **cd into the target project directory** (the companion tracks tasks by cwd,
    see Gotchas), then launch with `Bash run_in_background`, using the literal
@@ -203,6 +211,51 @@ hardening against conditions that won't happen in practice.
    input/state occurs in realistic use — drop extreme-edge-case /
    over-defensive findings rather than dispatching fixes for them.
 
+## Program-scale work (more than ~3 dispatches): manifest, waves, closeout
+
+The flow above is the task loop. When work grows into a campaign — many
+dispatches, multiple days, risky or irreversible steps — add the program
+layer:
+
+1. **Audit first; freeze scope in a manifest.** Fan out parallel audit
+   subagents (Explore / general-purpose + `model: sonnet` — cheap) over the
+   affected slices, then synthesize one manifest file at
+   `~/.claude/fable-gpt/briefs/<project-dir-name>/<date>-MANIFEST.md`. It
+   assigns every unit of code a verdict and a wave number. Every subsequent
+   brief cites it as authoritative — no worker re-litigates scope. Anything
+   the audits were silent on is marked UNKNOWN: workers stop and report it
+   (the standing escalation clause), the orchestrator gets a user ruling
+   where needed, and the ruling is written back into the manifest so later
+   dispatches inherit it. The manifest is also the durable answer to context
+   rot — it survives compactions and session clears where conversation
+   context and ad-hoc handoff files do not.
+
+2. **Order waves by risk, irreversible last.** Sequence safest → most
+   irreversible: verified-no-dependents changes first, shared-infrastructure
+   surgery and bulk edits in the middle, production data changes then schema
+   migrations last — and only after every code path touching the affected
+   state is verifiably updated. Before each risky wave, create a
+   restore-point git tag.
+
+3. **Gate between waves, not just per task.** No wave starts until the
+   previous one passes a full regression gate (the gate re-run subagent,
+   scoped to the whole program's test surface, not one task's diff). A failed
+   gate spawns a scoped Codex fix dispatch, then the gate re-runs.
+
+4. **Irreversible steps: propose the inventory, approve the list, execute
+   exactly the list.** For production data changes, schema migrations, bulk
+   deletions: dispatch task 1 WITHOUT `--write` to emit the exact inventory
+   (rows, files, migrations); surface that literal list to the user for
+   approval; then dispatch task 2 with the approved list pasted into its
+   brief, executing only that inventory and re-verifying counts afterwards.
+   The user approves a list, never an intention.
+
+5. **Closeout: teach the system what changed.** The program's mandatory final
+   phase updates the repo's agent-facing docs — run
+   `/claude-md-management:revise-claude-md` for CLAUDE.md and (if installed)
+   `/ce-compound` to capture durable learnings — so future sessions start
+   from the new architecture, not stale instructions.
+
 ## Orchestration rules: the main agent dispatches, never executes
 
 The main agent's context is the scarcest resource — flooded with execution
@@ -241,9 +294,23 @@ down:**
   this skill's main-session direct launch.
 - Multiple concurrent Codex tasks: separate brief files and separate background
   shells (user-tested: 5–7 concurrent on a Codex 20x plan without hitting
-  limits). When context rots (~4 compactions), preserve context then clear the
+  limits) — but **at most one `--write` task per repo at a time**. Concurrent
+  read-only tasks (reviews, audits, exploration) are unrestricted. Reason: all
+  write tasks share one working tree, and both the adversarial-review template
+  ("uncommitted working-tree changes") and the gate re-run assume that tree
+  holds exactly one task's changes — two concurrent writers produce a blended
+  diff the reviewer misattributes and a half-edited tree the gate builds.
+  Disjoint file boundaries alone don't fix the gate. If a program genuinely
+  needs parallel writes: one git worktree per write task, plus an explicit
+  disjoint file boundary restated in every brief (never assumed), and review
+  briefs scoped to that task's file list. Worktrees change the flow: the
+  companion is cwd-keyed (launch and query from each worktree), and merging
+  back needs commits — the review-the-uncommitted-tree template no longer
+  applies as-is.
+- When context rots (~4 compactions), preserve context then clear the
   conversation — use /handoff if installed, otherwise have a subagent write a
-  handoff file.
+  handoff file. At program scale, the manifest (see Program-scale work) is the
+  durable, structured version of this.
 
 ## Model tiers (task tier ↔ model tier)
 
