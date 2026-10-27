@@ -1,13 +1,16 @@
 ---
 name: fable-gpt
-description: Fable-GPT orchestration workflow — the main agent (Fable) only dispatches and adjudicates; heavy implementation/debugging/refactoring goes to Codex (gpt-5.6-sol high by default); Codex cold-read reviews run on gpt-6-astra at xhigh; exploration/review/gate re-runs go to tiered Claude subagents. Use when orchestrating multi-agent work; when delegating implementation, debugging, refactoring, or test-fixing to Codex; when launching, resuming, monitoring, or cancelling a codex-companion task; or when the user says use Codex / run a Codex task / Fable-GPT. Also covers program-scale campaigns (scope manifest, risk-ordered waves, wave gates, inventory approval for irreversible steps, docs closeout).
+description: Fable-GPT orchestration workflow — the main agent (Opus 5.5) only dispatches and adjudicates; heavy implementation/debugging/refactoring goes to Codex (gpt-6-astra xhigh by default); Codex cold-read reviews also run on gpt-6-astra at xhigh; exploration/review/gate re-runs go to tiered Claude subagents. Use when orchestrating multi-agent work; when delegating implementation, debugging, refactoring, or test-fixing to Codex; when launching, resuming, monitoring, or cancelling a codex-companion task; or when the user says use Codex / run a Codex task / Fable-GPT. Also covers program-scale campaigns (scope manifest, risk-ordered waves, wave gates, inventory approval for irreversible steps, docs closeout).
 ---
 
-# Fable-GPT: Fable orchestrates, Codex executes
+# Fable-GPT: the main session orchestrates, Codex executes
 
-Division of labor: **the main agent (Fable) only dispatches and decides** —
+(The name is historical: the orchestrator is now **Opus 5.5** as the main
+session model — switched from Fable 5 on 2026-10-27.)
+
+Division of labor: **the main agent (Opus 5.5) only dispatches and decides** —
 planning, architecture calls, task decomposition, dispatching, adjudicating from
-summaries. **Codex (gpt-5.6-sol) does the heavy execution** — large
+summaries. **Codex (gpt-6-astra) does the heavy execution** — large
 implementations, debugging, test fixing, multi-file refactors. **All other
 concrete work (repo exploration, result review, gate re-runs) goes to Claude
 subagents**, which return conclusions only. Keep Codex tasks focused, specific,
@@ -31,21 +34,23 @@ high setting, so err upward. Tiering:
 
 | Situation | Model + effort |
 |---|---|
-| Routine implementation / refactor / test fixing (driver default) | `gpt-5.6-sol` + `high` |
-| Hard debugging, gnarly multi-file work | `gpt-5.6-sol` + `xhigh` |
+| Implementation / refactor / test fixing / hard debugging (driver default) | `gpt-6-astra` + `xhigh` (fallback: `gpt-5.6-sol` + `xhigh`) |
 | Cold-read adversarial review, design review of a brief (single-chain judgment) | `gpt-6-astra` + `xhigh` (fallback: `gpt-5.6-sol` + `max`/`xhigh`) |
 | `ultra` | **never in this workflow** — it spawns Codex-internal parallel subagents, duplicating what Fable-GPT already does at the orchestration layer; one dispatch = one focused task |
 
-**gpt-6-astra is the review model only** (adopted 2026-09-07, on its release):
-reviews are single-chain judgment work, where the newest generation's gains
-land hardest; implementation stays on `gpt-5.6-sol` (the driver default) until
-astra's write-mode behavior is field-tested in this workflow. `driver.sh
-review` passes `--model gpt-6-astra --effort xhigh` itself; a hand-launched
-review must pass them explicitly — `run` never infers them. `xhigh` is within
-the stock companion allowlist, so astra reviews do not depend on the `max`
+**gpt-6-astra at `xhigh` is the model for both implementation and review.**
+Adopted for reviews 2026-09-07 (on its release), extended to implementation
+2026-10-27 (user decision). `driver.sh run` defaults to `--model gpt-6-astra
+--effort xhigh`, and `driver.sh review` passes the same pair itself. `xhigh` is
+within the stock companion allowlist, so neither depends on the `max`
 allowlist patch below. If the relay rejects `gpt-6-astra` (task fails
-immediately), fall back to the pre-astra review config: `gpt-5.6-sol` + `max`
-(then `xhigh`).
+immediately), fall back to `gpt-5.6-sol`: `xhigh` for implementation, `max`
+(then `xhigh`) for reviews.
+
+The implementer and the Codex cold reader are now the same model. A fresh
+thread still breaks the implementer's reasoning chain, but the model family no
+longer differs, so on implementation waves the Opus reviewer subagent is the
+only cross-family check. Do not drop it from the fan-out.
 
 Status (field-checked 2026-08-10): **`max` is confirmed working on this
 setup** — the companion allowlist patch is applied and the relay accepts it.
@@ -91,8 +96,9 @@ re-attach with `driver.sh watch`).
      the next call; reference the literal path everywhere;
    - `$CLAUDE_JOB_DIR` may be unset — do not rely on it.
    - **Keep briefs lean**: gpt-5.6-sol requests over 272K input tokens bill 2×
-     input / 1.5× output *for the entire request*. The 1M window is for
-     Codex's own exploration, not for stuffing repo context into the brief.
+     input / 1.5× output *for the entire request* (check astra's long-context
+     pricing before assuming it is exempt). The large window is for Codex's
+     own exploration, not for stuffing repo context into the brief.
 
 2. **cd into the target project directory** (the companion tracks tasks by cwd,
    see Gotchas), then launch with `Bash run_in_background`, using the literal
@@ -102,7 +108,7 @@ re-attach with `driver.sh watch`).
 cd <project-dir> && ~/.claude/skills/fable-gpt/driver.sh run ~/.claude/fable-gpt/briefs/<project-dir-name>/<timestamp>-<task>.md --write
 ```
 
-   Defaults: `--fresh --model gpt-5.6-sol --effort high` (override with the
+   Defaults: `--fresh --model gpt-6-astra --effort xhigh` (override with the
    same flags; model + effort tiers above). **Pass `--write` explicitly
    whenever Codex must modify files** — the driver never adds it implicitly.
    `--foreground` restores the old in-process mode (no detached worker) if
@@ -299,7 +305,7 @@ cd <project-dir> && ~/.claude/skills/fable-gpt/driver.sh review ~/.claude/fable-
    shaky (Codex's own summary hedges, gates are obviously broken), run the
    Codex cold read alone first and hold the other two — saves reviewer/gate
    spend on a doomed diff. Parallel is the default because the wall-clock win
-   (the astra xhigh review is usually the longest leg) normally beats the
+   (the Codex review is usually the longest leg) normally beats the
    occasional wasted check.
 
    (The companion's built-in `review`/`adversarial-review` subcommands accept
@@ -419,13 +425,13 @@ down:**
   only.
 - **Codex result review** → the parallel check fan-out above, tiered for fix
   rounds. The reviewer subagent is a custom agent at
-  `~/.claude/agents/reviewer.md` (frontmatter `model: opus` → Opus 5, native
-  1M context; no Write/Edit tools so physically read-only; **do not pass a
-  model parameter**). It returns a verdict (pass / issue list); the main
+  `~/.claude/agents/reviewer.md` (frontmatter `model: opus` → Opus 5.5; no
+  Write/Edit tools so physically read-only; **do not pass a model
+  parameter**). It returns a verdict (pass / issue list); the main
   agent decides: accept, dispatch a Codex fix task, or change approach.
-- **Model tiering: fable orchestrates only**; subagents get models by task
-  tier (table below); except for reviewer, **always pass an explicit model
-  alias** in Agent calls.
+- **Model tiering: the main session (Opus 5.5) orchestrates only**; subagents
+  get models by task tier (table below); except for reviewer, **always pass
+  an explicit model alias** in Agent calls.
 - **Build/test gates** → a verification subagent re-runs them on the host and
   returns pass/fail + a failure summary only. Codex saying "verified" does not
   count — its sandbox forbids loopback sockets, so the Gradle daemon cannot
@@ -463,16 +469,16 @@ down:**
 
 | Task | Dispatch | Model |
 |---|---|---|
-| Orchestration / adjudication | main session itself | fable = Fable 5 (sole user; never for subagents) |
-| Codex result review | `subagent_type: reviewer`, no model param | opus = Opus 5 (pinned in frontmatter) |
-| Exploration / locating / spec extraction | Explore or general-purpose + `model: sonnet` | sonnet = Sonnet 5 |
+| Orchestration / adjudication | main session itself | Opus 5.5 (session model) |
+| Codex result review | `subagent_type: reviewer`, no model param | opus = Opus 5.5 (pinned in frontmatter) |
+| Exploration / locating / spec extraction | Explore or general-purpose + `model: sonnet` | sonnet = Sonnet 5.5 |
 | Gate re-runs / device acceptance | general-purpose + `model: sonnet` | sonnet |
 | Exception: heavy analysis (e.g. large transcript audits) | general-purpose + `model: opus` | opus |
-| Implementation / refactor / test fixing | Codex, effort per tier table | gpt-5.6-sol |
+| Implementation / refactor / test fixing | Codex `run` (= `--model gpt-6-astra --effort xhigh`) | gpt-6-astra |
 | Codex cold-read adversarial review | `driver.sh review <impl-brief>` (= `--fresh --model gpt-6-astra --effort xhigh`, no `--write`) | gpt-6-astra |
 | Design review of a concurrency brief (flow step 0) | Codex `run`, `--fresh --model gpt-6-astra --effort xhigh`, no `--write` | gpt-6-astra |
 
-**Context windows**: the whole Claude 5 family (Fable 5, Opus 5, Sonnet 5) runs
+**Context windows**: the whole Claude 5 family (Opus 5.5, Sonnet 5.5, …) runs
 the **1M token window natively** on the Anthropic API — there is no `[1m]`
 variant to select and no frontmatter pinning needed for context reasons. (The
 old machinery — pinning `claude-opus-4-8[1m]` in reviewer frontmatter because
@@ -508,7 +514,7 @@ target since Claude Code 2.1.219.)
   frontmatter (re-confirmed in current docs) — setting it silently disables
   the whole tiering scheme.
 - **The default model without an explicit param is unreliable**: docs say
-  inherit-from-main (i.e. fable), but a real session landed on a different
+  inherit-from-main (i.e. Opus 5.5), but a real session landed on a different
   model — hence: always pass an explicit alias, except for reviewer.
 - **Shell state does not persist between Bash tool calls** (variables and cwd
   both reset). Pass task-brief paths as literals; chain `cd` with the follow-up
@@ -545,7 +551,7 @@ target since Claude Code 2.1.219.)
 | Second rejection of the same kind on the same subsystem | Stop point fixes — dispatch the full-enumeration task (flow step 3, stop rule) |
 | `--effort max` refused by the driver | Companion allowlist unpatched — run the printed `sed` command once (re-run after plugin updates), or use `xhigh` |
 | Task fails immediately at `max` effort (HTTP 400 from backend) | The relay/backend doesn't support `max` — fall back to `xhigh` |
-| Review task fails immediately with `--model gpt-6-astra` | The relay/backend doesn't serve astra yet — fall back to the pre-astra review config: `driver.sh review ... --model gpt-5.6-sol --effort max` (then `xhigh`) |
+| Task fails immediately with `--model gpt-6-astra` | The relay/backend doesn't serve astra — fall back to gpt-5.6-sol: `driver.sh run ... --model gpt-5.6-sol --effort xhigh` for implementation, `driver.sh review ... --model gpt-5.6-sol --effort max` (then `xhigh`) for reviews |
 | Codex hits Gradle `SocketException: Operation not permitted` | Sandbox forbids loopback — expected. Codex compiles and tests with the direct toolchain (self-check clause); gates are re-run by the verification subagent on the host |
 | Codex finished but no files changed | `--write` was missing. Write a small brief saying "apply the changes", then `driver.sh run <that-file> --resume --write` to continue the thread |
 | `status` can't find a just-launched task | Wrong cwd — return to the project directory the task was launched from |
