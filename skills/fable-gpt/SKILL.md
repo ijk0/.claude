@@ -1,6 +1,6 @@
 ---
 name: fable-gpt
-description: Fable-GPT orchestration workflow — the main agent (Opus 5.5) only dispatches and adjudicates; heavy implementation/debugging/refactoring goes to Codex (gpt-6-astra xhigh by default); Codex cold-read reviews also run on gpt-6-astra at xhigh; exploration/review/gate re-runs go to tiered Claude subagents. Use when orchestrating multi-agent work; when delegating implementation, debugging, refactoring, or test-fixing to Codex; when launching, resuming, monitoring, or cancelling a codex-companion task; or when the user says use Codex / run a Codex task / Fable-GPT. Also covers program-scale campaigns (scope manifest, risk-ordered waves, wave gates, inventory approval for irreversible steps, docs closeout).
+description: Fable-GPT orchestration workflow — the main agent (Opus 5.5) only dispatches and adjudicates; Codex (gpt-6-astra) does the work — implementation/debugging/refactoring at xhigh, read-only exploration and audits, cold-read reviews at xhigh (important reviews: astra max + a Sonnet-max reviewer subagent); Claude subagents are otherwise the exception; host gates run from the main session; a Monitor keepalive pings every 290s so the 5-minute prompt cache survives Codex waits. Use when orchestrating multi-agent work; when delegating implementation, debugging, refactoring, or test-fixing to Codex; when launching, resuming, monitoring, or cancelling a codex-companion task; or when the user says use Codex / run a Codex task / Fable-GPT. Also covers program-scale campaigns (scope manifest, risk-ordered waves, wave gates, inventory approval for irreversible steps, docs closeout).
 ---
 
 # Fable-GPT: the main session orchestrates, Codex executes
@@ -8,23 +8,30 @@ description: Fable-GPT orchestration workflow — the main agent (Opus 5.5) only
 (The name is historical: the orchestrator is now **Opus 5.5** as the main
 session model — switched from Fable 5 on 2026-10-27.)
 
-Division of labor: **the main agent (Opus 5.5) only dispatches and decides** —
-planning, architecture calls, task decomposition, dispatching, adjudicating from
-summaries. **Codex (gpt-6-astra) does the heavy execution** — large
-implementations, debugging, test fixing, multi-file refactors. **All other
-concrete work (repo exploration, result review, gate re-runs) goes to Claude
-subagents**, which return conclusions only. Keep Codex tasks focused, specific,
-one thing at a time; never trust its output blindly — but the checking itself is
-also done by subagents, never in the main context. Heavy tasks default to
-implementation followed by a **parallel check fan-out** (Codex cold-read review
-+ reviewer subagent + gate re-run), with all verdicts returned to the main
-agent for one adjudication pass (see below).
+Division of labor (user ruling 2026-10-29: few subagents, hand the work to
+Codex): **the main agent (Opus 5.5) only dispatches and decides** — planning,
+architecture calls, task decomposition, dispatching, adjudicating from
+summaries. **Codex (gpt-6-astra) does all the work its sandbox allows** —
+implementation, debugging, test fixing, multi-file refactors, and the
+read-only work too: repo exploration, audits, design and cold-read reviews.
+**Claude subagents are the exception** (Orchestration rules): the Sonnet-max
+reviewer as the cross-family leg of important reviews, and host-side work
+that needs multi-step judgment. Host build/test gates run from the main
+session as a background shell with bounded output. Keep Codex tasks focused,
+specific, one thing at a time; never trust its output blindly — but the
+checking is dispatched too, never done by reading diffs in the main context.
+Heavy tasks default to implementation followed by a **parallel check pair**
+(Codex cold-read review + host gate; important reviews add the reviewer
+subagent), all returned to the main agent for one adjudication pass (see
+below). While Codex runs, a **keepalive** stops the
+main session's 5-minute prompt cache from expiring (see Monitoring).
 
 Driver: `~/.claude/skills/fable-gpt/driver.sh` (wraps codex-companion.mjs,
 resolves the active plugin version automatically, takes the task brief from a
 file to avoid shell-quoting issues). Subcommands: `run` (implement),
 `review` (generate + launch the adversarial review brief), `watch`
-(re-attach), plus companion passthrough (`status`, `result`, `cancel`, …).
+(re-attach), `keepalive` (prompt-cache pings for the Monitor tool), plus
+companion passthrough (`status`, `result`, `cancel`, …).
 
 ## Codex model + effort tiers
 
@@ -35,27 +42,33 @@ high setting, so err upward. Tiering:
 | Situation | Model + effort |
 |---|---|
 | Implementation / refactor / test fixing / hard debugging (driver default) | `gpt-6-astra` + `xhigh` (fallback: `gpt-5.6-sol` + `xhigh`) |
-| Cold-read adversarial review, design review of a brief (single-chain judgment) | `gpt-6-astra` + `xhigh` (fallback: `gpt-5.6-sol` + `max`/`xhigh`) |
+| Read-only exploration, locating, audits, spec extraction | `gpt-6-astra` + `xhigh`, no `--write` |
+| Routine cold-read review (fix rounds, changes with no concurrency, safety or shared-authority surface) | `gpt-6-astra` + `xhigh` (`driver.sh review` default) |
+| **Important review**: design review of a brief (flow step 0), implementation waves touching concurrency / lifecycle / safety / shared authority, the stop-rule re-review, acceptance before an irreversible step | `gpt-6-astra` + **`max`** (`--effort max`); fallback: astra `xhigh`, then `gpt-5.6-sol` + `max`. Diff reviews other than fix rounds also get the Sonnet-max reviewer subagent (flow step 2) |
 | `ultra` | **never in this workflow** — it spawns Codex-internal parallel subagents, duplicating what Fable-GPT already does at the orchestration layer; one dispatch = one focused task |
 
-**gpt-6-astra at `xhigh` is the model for both implementation and review.**
-Adopted for reviews 2026-09-07 (on its release), extended to implementation
-2026-10-27 (user decision). `driver.sh run` defaults to `--model gpt-6-astra
---effort xhigh`, and `driver.sh review` passes the same pair itself. `xhigh` is
-within the stock companion allowlist, so neither depends on the `max`
-allowlist patch below. If the relay rejects `gpt-6-astra` (task fails
-immediately), fall back to `gpt-5.6-sol`: `xhigh` for implementation, `max`
-(then `xhigh`) for reviews.
+**gpt-6-astra is the model for everything Codex does; effort separates routine
+work (`xhigh`) from important reviews (`max`, user ruling 2026-10-29).**
+Adopted for reviews 2026-09-07 (on its release), implementation 2026-10-27.
+`driver.sh run` defaults to `--model gpt-6-astra --effort xhigh`, and
+`driver.sh review` passes the same pair unless given `--effort max`.
+**astra at `max` is not field-checked yet** — the first important review is
+the check: if it fails immediately (HTTP 400 / effort rejected), rerun at
+`xhigh` and record the outcome in this section. If the relay rejects
+`gpt-6-astra` itself, fall back to `gpt-5.6-sol`: `xhigh` for implementation,
+`max` (then `xhigh`) for reviews.
 
-The implementer and the Codex cold reader are now the same model. A fresh
-thread still breaks the implementer's reasoning chain, but the model family no
-longer differs, so on implementation waves the Opus reviewer subagent is the
-only cross-family check. Do not drop it from the fan-out.
+The implementer and the Codex cold reader are the same model. A fresh thread
+breaks the implementer's reasoning chain and `max` deepens the read where it
+matters, but only a different model family catches the blind spots astra
+shares with itself. So important diff reviews add one cross-family leg: the
+reviewer subagent, pinned to **Sonnet 5.5 at `max` effort** in its
+frontmatter (user ruling 2026-10-29). Routine reviews have no cross-family
+leg.
 
-Status (field-checked 2026-08-10): **`max` is confirmed working on this
-setup** — the companion allowlist patch is applied and the relay accepts it.
-(`max` now only matters for the gpt-5.6-sol review fallback above.)
-Two things can regress:
+Status (field-checked 2026-08-10 with gpt-5.6-sol; allowlist re-checked
+2026-10-29): **`max` passes the companion** — the allowlist patch is applied
+and the relay accepted it for sol. Two things can regress:
 - **Plugin updates reset the companion allowlist** (stock 1.0.6 stops at
   `xhigh`). The driver detects an unpatched companion and refuses
   `max`/`ultra` with the one-line manual `sed` patch command printed to
@@ -139,6 +152,9 @@ cd <project-dir> && ~/.claude/skills/fable-gpt/driver.sh run ~/.claude/fable-gpt
    the harness's own background-output file is session-scoped and eventually
    cleaned up.
 
+4. **Arm the prompt-cache keepalive** as the last tool call of the launch
+   turn (Monitoring → Prompt-cache keepalive).
+
 ### Brief template (every implementation brief, in this order)
 
 1. **Title + repo line + location statement.** After the repo/worktree line,
@@ -208,6 +224,13 @@ Fix-round briefs use the same skeleton: findings (each with the reviewer's
 reproduction, the required behaviour, and the test to add) replace block 3,
 and the contract table is re-attached whenever a finding touched it.
 
+Read-only briefs (exploration, audits, design reviews — the work that used to
+go to Claude subagents) are shorter: title + location statement, the
+question, the scope (paths; specs and manifests by absolute path), the output
+contract — conclusions with file:line evidence, by severity for reviews, no
+file or diff dumps, a length cap — and, verbatim, *"Read-only: do not modify
+any files."* Launch them without `--write`; any number may run concurrently.
+
 ## Monitoring and management (always from the same project directory)
 
 Completion notifies automatically — **no routine polling**. Use these when you
@@ -229,6 +252,62 @@ run from a *different* Claude session than the one that launched the task can
 come back empty (`"running": []`) while the task is demonstrably mid-flight
 (observed live). Single-job queries by id (`status <job-id>`) read the job
 file directly and stay reliable cross-session.
+
+### Prompt-cache keepalive while waiting
+
+The main session's prompt cache has a **5-minute TTL**, refreshed by every
+request that reads it. A Codex run leaves the session idle for 15–60 minutes;
+with no request in between, the completion turn re-reads the whole context
+uncached — a cache write at 1.25× base input price instead of a 0.1× read,
+plus a slow cold prefill on a large context. One ping turn every **290 s
+(4 min 50 s)** keeps it warm at about 0.1× per ping.
+
+**Mechanism: the Monitor tool running `driver.sh keepalive`.** Every stdout
+line is one event, and each event wakes the idle session for one turn — no
+re-arming tool call, so a ping is a single cache-reading request. Monitor and
+TaskStop are deferred tools: load them with ToolSearch
+`select:Monitor,TaskStop` first. Arm it as the last tool call of the turn
+that launched the run(s):
+
+```
+Monitor  description: "fable-gpt cache keepalive"   timeout_ms: 1800000
+         command: ~/.claude/skills/fable-gpt/driver.sh keepalive ~/.claude/fable-gpt/briefs/<project-dir-name>/<timestamp>-<task>.md [<more briefs>]
+```
+
+- Pings run on a fixed 290 s schedule from the arm time. The arming turn's
+  last request comes after the arm, and any later activity only touches the
+  cache more recently, so the gap from the last touch to the next ping stays
+  at or under 291 s (integer-second timer) — 9 s of margin.
+- With briefs listed, the keepalive reads each brief's `.result.md` run
+  markers every 15 s (file-only — no companion call, works from any cwd) and
+  exits with one line once every listed run has finished; the run's own
+  background shell delivers the result notification. With no briefs (e.g. a
+  long host gate) it is a plain timer — TaskStop it when the awaited
+  notification arrives.
+- **One keepalive per session.** When another run launches mid-wait,
+  TaskStop the current monitor and arm a new one listing every in-flight
+  brief.
+
+**Ping-turn protocol.** On a `[keepalive] ping` event: no tool calls, no
+reads, no status checks — end the turn with at most one short line (e.g.
+`keepalive 3/6`). The ping exists only to send one request; work in it costs
+output tokens and context growth. Ignore the `watched runs finished` event —
+the completion notification carries the result.
+
+**Cap (ski rental).** Each ping costs about 0.1 × C (C = the cost of the
+context as uncached input); letting the cache lapse costs about 1.15 × C once
+(1.25 write − 0.1 read). Break-even is about 11 pings ≈ 53 min: ping up to
+that, then stop — worst case about twice the better choice in hindsight, with
+no need to predict the run length. Concretely: the default arm is 6 pings
+(29 min, fits one 30-minute Monitor); on its `last ping of this arm` line with
+runs still in flight, arm once more with `--pings 5`; after that let the
+cache lapse. Skip the keepalive entirely when the wait is known to exceed an
+hour (overnight wave, user away) or when the wait is on the user rather than
+on a job.
+
+Fallback if the Monitor tool is unavailable: `driver.sh keepalive --pings 1
+<briefs>` via `Bash run_in_background`, re-armed with one call per wake — two
+requests per ping instead of one, same cap.
 
 ### After an interruption (compaction, /clear, dead shell)
 
@@ -257,21 +336,23 @@ the checks and go straight to adjudication.
 0. **Design review (concurrency, lifecycle or shared-authority modules
    only)**: before any code exists, dispatch astra read-only on the brief
    itself — `run <design-review-brief> --fresh --model gpt-6-astra --effort
-   xhigh`, no `--write` — with the brief and spec sections by absolute path,
-   asked to find races, missing contract-table rows, and contradictory rules
-   in the contract, output by severity. Fold findings into the brief, then
-   implement. About 15 minutes; one such review would have replaced seven
-   fix rounds plus seven re-reviews in DJI-M4T Wave 8.
+   max`, no `--write` (an important review — tier table) — with the brief
+   and spec sections by absolute path, asked to find races, missing
+   contract-table rows, and contradictory rules in the contract, output by
+   severity. Fold findings into the brief, then implement. About 15 minutes
+   at `xhigh`, longer at `max`; one such review would have replaced seven fix
+   rounds plus seven re-reviews in DJI-M4T Wave 8.
 1. **Implementation**: dispatch per the launch path above (`--write`, effort
    per the tier table). On completion, Read `.reply.md` for the "original
    conclusion".
-2. **Checks — dispatch all three in parallel** (all read-only and independent;
-   this collapses what used to be two serial phases into one):
+2. **Checks — dispatch in parallel** (read-only and independent): the Codex
+   cold read and the host gate always; the reviewer subagent as well when
+   this is an important review (tier table):
    - **Codex cold-read review** via the driver, from the main session with
-     `Bash run_in_background`:
+     `Bash run_in_background` (add `--effort max` for an important review):
 
 ```bash
-cd <project-dir> && ~/.claude/skills/fable-gpt/driver.sh review ~/.claude/fable-gpt/briefs/<project-dir-name>/<timestamp>-<task>.md [--scope '<diff scope>'] [--extra-file <blocker-criteria-and-probes.md>]
+cd <project-dir> && ~/.claude/skills/fable-gpt/driver.sh review ~/.claude/fable-gpt/briefs/<project-dir-name>/<timestamp>-<task>.md [--effort max] [--scope '<diff scope>'] [--extra-file <blocker-criteria-and-probes.md>]
 ```
 
      `review` writes `<task>-review.md` next to the brief (suffix `-r2`,
@@ -283,37 +364,55 @@ cd <project-dir> && ~/.claude/skills/fable-gpt/driver.sh review ~/.claude/fable-
      reproduction named in the brief; regenerated expected outputs are not
      evidence), the location statement, the full original brief, the
      implementer's conclusion, and the optional extra-checks section — then
-     launches it **`--fresh --model gpt-6-astra --effort xhigh`, never
-     `--write`** (conclusions only; fixes are dispatched separately after
-     adjudication). `--scope` defaults to uncommitted working-tree changes
-     (`git diff` / untracked files); give an explicit file list when the
-     tree holds more than this task. `--extra-file` carries the wave's
-     blocker criteria and the reproductions to re-run — the Write tool
-     writes it to the briefs directory like any brief. `--no-launch` only
-     writes the brief; `--reply <file>` names the reply for runs older than
-     the `.reply.md` mechanism; `--model`/`--effort` select the fallback per
-     the tier section. **Never `--resume` the implementation thread to
+     launches it **`--fresh --model gpt-6-astra --effort xhigh` (or the
+     `--effort` given), never `--write`** (conclusions only; fixes are
+     dispatched separately after adjudication). `--scope` defaults to
+     uncommitted working-tree changes (`git diff` / untracked files); give
+     an explicit file list when the tree holds more than this task.
+     `--extra-file` carries the wave's blocker criteria and the
+     reproductions to re-run — the Write tool writes it to the briefs
+     directory like any brief. `--no-launch` only writes the brief;
+     `--reply <file>` names the reply for runs older than the `.reply.md`
+     mechanism; `--model`/`--effort` select `max` or a fallback per the tier
+     section. Arm one keepalive listing the review brief. **Never `--resume` the implementation thread to
      self-review** — with its own reasoning context intact, its wrong
      premises hold during self-review too; that catches slips, not "the
      whole approach is wrong". A cold read does.
-   - **Reviewer subagent** (`subagent_type: reviewer`): give it the task-brief
-     path, the `.reply.md` path, and the diff scope (e.g. `git diff`).
-   - **Gate re-run subagent**: re-runs build/test on the host, returns
-     pass/fail + failure summary only (gate rules under Program-scale work).
+   - **Host gate** from the main session with `Bash run_in_background`: the
+     full build/test output goes to a log in the briefs directory, and only
+     the exit code plus a grep'd summary come back (gate rules under
+     Program-scale work):
+
+```bash
+cd <project-dir> && touch ~/.claude/fable-gpt/briefs/<project-dir-name>/<timestamp>-gate.start && <gate command> > ~/.claude/fable-gpt/briefs/<project-dir-name>/<timestamp>-gate.log 2>&1; echo "gate exit=$?"; grep -E '<failure + summary pattern, e.g. FAILED|BUILD (SUCCESSFUL|FAILED)|tests completed>' ~/.claude/fable-gpt/briefs/<project-dir-name>/<timestamp>-gate.log | tail -20
+```
+
+     Then the freshness check, also bounded: `find <test-report-dir> -name
+     'TEST-*.xml' -newer <…>-gate.start | wc -l` must equal the expected
+     report count. Read the log only through `grep … | tail`, never whole.
+     A failure that needs real triage on the host is one of the subagent
+     exceptions (Orchestration rules).
+   - **Reviewer subagent — important reviews only** (implementation waves
+     touching concurrency / lifecycle / safety / shared authority, the
+     stop-rule re-review, acceptance before an irreversible step; not fix
+     rounds, not the step-0 design review): `subagent_type: reviewer`, **no
+     `model` or `effort` param** (frontmatter pins Sonnet 5.5 at `max`). Give
+     it the task-brief path, the `.reply.md` path and the diff scope (e.g.
+     `git diff`).
 
    *Sequential short-circuit variant*: when the implementation already looks
-   shaky (Codex's own summary hedges, gates are obviously broken), run the
-   Codex cold read alone first and hold the other two — saves reviewer/gate
-   spend on a doomed diff. Parallel is the default because the wall-clock win
-   (the Codex review is usually the longest leg) normally beats the
-   occasional wasted check.
+   shaky (Codex's own summary hedges, the build obviously fails), run the
+   Codex cold read alone first and hold the other legs — saves gate and
+   reviewer spend on a doomed diff. Parallel is the default because the
+   wall-clock win (the Codex review is usually the longest leg) normally
+   beats the occasional wasted check.
 
    (The companion's built-in `review`/`adversarial-review` subcommands accept
    `--model` but **no `--effort`**, and upstream `codex /review` runs at
    hardcoded LOW effort — both reasons the task path is the only adequate
    review vehicle.)
 
-3. **Adjudication**: one pass over all three verdicts — any blocker →
+3. **Adjudication**: one pass over all verdicts — any blocker →
    dispatch a Codex fix task (may `--resume` the implementation thread, now
    with `--write`; verify the resume candidate first), then re-check; all
    green = done. Codex's review verdict is decision input, not a pass stamp —
@@ -324,16 +423,18 @@ cd <project-dir> && ~/.claude/skills/fable-gpt/driver.sh review ~/.claude/fable-
    - **Re-review is tiered by what the fix diff touches.** Trivial rounds
      (renames, test-only changes, a guard added exactly where the reviewer
      pointed): the orchestrator checks the fix points directly in the main
-     session with bounded commands (user instruction 2026-09-02) or sends a
-     reviewer subagent, plus the gate. Any touch of concurrency, safety or
-     shared authority: `driver.sh review` on the fix brief (astra) plus the
-     gate. Implementation waves always get the full fan-out.
+     session with bounded commands (user instruction 2026-09-02), plus the
+     gate. Other fix rounds: `driver.sh review` on the fix brief (astra
+     `xhigh`) plus the gate. Any touch of concurrency, safety or shared
+     authority: the same at `--effort max`. Implementation waves always get
+     the full step-2 checks (with the reviewer when important).
    - **Stop rule.** A second rejection of the same kind on the same
      subsystem (a second race in the same module, a second missing lifecycle
      path in the same state machine) ends point fixes. The next dispatch is
      a **full-enumeration task**: enumerate every operation and event of
      that kind in the subsystem into the contract table, fix every row in
-     one pass with one named test per row, then one astra re-review. Log
+     one pass with one named test per row, then one astra re-review at
+     `--effort max`. Log
      `kind × subsystem` for every rejection in the manifest rulings log so
      the second hit is visible. (DJI-M4T Wave 8, 2026-09-08: seven rounds
      patching one reported path each.)
@@ -344,9 +445,10 @@ The flow above is the task loop. When work grows into a campaign — many
 dispatches, multiple days, risky or irreversible steps — add the program
 layer:
 
-1. **Audit first; freeze scope in a manifest.** Fan out parallel audit
-   subagents (Explore / general-purpose + `model: sonnet` — cheap) over the
-   affected slices, then synthesize one manifest file at
+1. **Audit first; freeze scope in a manifest.** Fan out parallel read-only
+   Codex audit tasks (one read-only brief per slice, no `--write`; one
+   keepalive listing all of them) over the affected slices, then synthesize
+   one manifest file at
    `~/.claude/fable-gpt/briefs/<project-dir-name>/<date>-MANIFEST.md`. It
    assigns every unit of code a verdict and a wave number. Every subsequent
    brief cites it as authoritative — no worker re-litigates scope. Anything
@@ -375,12 +477,12 @@ layer:
    restore-point git tag.
 
 4. **Gate between waves, not just per task.** No wave starts until the
-   previous one passes a full regression gate (the gate re-run subagent,
-   scoped to the whole program's test surface, not one task's diff). A failed
-   gate spawns a scoped Codex fix dispatch, then the gate re-runs. Gate
-   rules: **one build-tool client per worktree at a time** — only the gate
-   subagent runs Gradle (or the project's equivalent); reviewer subagents
-   and Codex reviews are static (in-memory compile and direct test runs
+   previous one passes a full regression gate (the host gate, scoped to the
+   whole program's test surface, not one task's diff). A failed gate spawns
+   a scoped Codex fix dispatch, then the gate re-runs. Gate rules: **one
+   build-tool client per worktree at a time** — only the host gate runs
+   Gradle (or the project's equivalent); Codex reviews and any reviewer
+   subagent are static (in-memory compile and direct test runs
    allowed, the build tool never — a concurrent targeted Gradle run
    clobbered a gate's XML reports on 2026-09-07); the **pass criterion is
    every expected test report present, counts matching, and report mtimes
@@ -417,30 +519,41 @@ down:**
 
 - **Heavy implementation / debugging / refactoring** → Codex. The only
   "hands-on" exceptions are lightweight dispatch actions — writing task briefs,
-  launching the companion, checking status, reading `.reply.md` — single
-  small tool calls that don't grow context; **launching must happen in the
-  main session via `Bash run_in_background`** (see the launch section — a
-  subagent launch loses the watcher and its completion notification).
-- **Repo exploration / locating** → Explore subagent; conclusions + file:line
-  only.
-- **Codex result review** → the parallel check fan-out above, tiered for fix
-  rounds. The reviewer subagent is a custom agent at
-  `~/.claude/agents/reviewer.md` (frontmatter `model: opus` → Opus 5.5; no
-  Write/Edit tools so physically read-only; **do not pass a model
-  parameter**). It returns a verdict (pass / issue list); the main
-  agent decides: accept, dispatch a Codex fix task, or change approach.
-- **Model tiering: the main session (Opus 5.5) orchestrates only**; subagents
-  get models by task tier (table below); except for reviewer, **always pass
-  an explicit model alias** in Agent calls.
-- **Build/test gates** → a verification subagent re-runs them on the host and
-  returns pass/fail + a failure summary only. Codex saying "verified" does not
-  count — its sandbox forbids loopback sockets, so the Gradle daemon cannot
-  start (`SocketException: Operation not permitted`) and such gates physically
-  cannot run there; the brief's self-check clause makes the direct toolchain
-  (kotlinc/JBR + `java -cp` JUnit, etc.) the required in-sandbox substitute,
-  and Claude subagents run the real gate on the host.
-- When dispatching any subagent, require **conclusions + key evidence only, no
-  full dumps**.
+  launching the companion, checking status, reading `.reply.md`, arming the
+  keepalive — single small tool calls that don't grow context; **launching
+  must happen in the main session via `Bash run_in_background`** (see the
+  launch section — a subagent launch loses the watcher and its completion
+  notification).
+- **Repo exploration / locating / audits** → a read-only Codex task (read-only
+  brief, no `--write`); conclusions + file:line only. A lookup whose target is
+  already known (one file, one symbol) needs no dispatch: the main session
+  runs bounded commands (`grep -n … | head`, `sed -n` ranges).
+- **Codex result review** → the Codex cold read in the check pair above,
+  tiered for fix rounds (`xhigh` routine, `max` important). The main agent
+  decides from its verdict: accept, dispatch a Codex fix task, or change
+  approach.
+- **Build/test gates** → the host gate, run by the main session as a
+  background shell with bounded output (recipe in flow step 2). Codex saying
+  "verified" does not count — its sandbox forbids loopback sockets, so the
+  Gradle daemon cannot start (`SocketException: Operation not permitted`) and
+  such gates physically cannot run there; the brief's self-check clause makes
+  the direct toolchain (kotlinc/JBR + `java -cp` JUnit, etc.) the required
+  in-sandbox substitute, and the real gate runs on the host.
+- **Claude subagents: by exception only, one at a time** (user ruling
+  2026-10-29 — anything that looks like subagent work is a Codex read-only
+  task first). Two exceptions:
+  1. The cross-family leg of an important review (flow step 2) — and, ad
+     hoc, a second opinion when astra and the implementer disagree on a
+     blocker: `subagent_type: reviewer`, a custom agent at
+     `~/.claude/agents/reviewer.md` (frontmatter `model: sonnet` + `effort:
+     max` → Sonnet 5.5 at max; no Write/Edit tools so physically read-only;
+     **do not pass a model or effort parameter**).
+  2. Host-side work that needs multi-step judgment the sandbox cannot give:
+     device acceptance, triaging a host gate failure whose grep'd summary
+     doesn't explain it (general-purpose + `model: sonnet`).
+
+  Except for reviewer, **always pass an explicit model alias** in Agent
+  calls, and require **conclusions + key evidence only, no full dumps**.
 - Small, clearly-bounded asks may go through `/codex:rescue`, but **foreground
   (`--wait`) only** — the rescue subagent prefers backgrounding "complex"
   tasks, which loses the completion notification. Heavy/long tasks always use
@@ -461,22 +574,21 @@ down:**
   from each worktree), and merging back needs commits — the
   review-the-uncommitted-tree default no longer applies as-is.
 - When context rots (~4 compactions), preserve context then clear the
-  conversation — use /handoff if installed, otherwise have a subagent write a
-  handoff file. At program scale, the manifest (see Program-scale work) is the
-  durable, structured version of this.
+  conversation — use /handoff if installed, otherwise write a handoff file to
+  the briefs directory with the Write tool. At program scale, the manifest
+  (see Program-scale work) is the durable, structured version of this.
 
 ## Model tiers (task tier ↔ model tier)
 
 | Task | Dispatch | Model |
 |---|---|---|
-| Orchestration / adjudication | main session itself | Opus 5.5 (session model) |
-| Codex result review | `subagent_type: reviewer`, no model param | opus = Opus 5.5 (pinned in frontmatter) |
-| Exploration / locating / spec extraction | Explore or general-purpose + `model: sonnet` | sonnet = Sonnet 5.5 |
-| Gate re-runs / device acceptance | general-purpose + `model: sonnet` | sonnet |
-| Exception: heavy analysis (e.g. large transcript audits) | general-purpose + `model: opus` | opus |
-| Implementation / refactor / test fixing | Codex `run` (= `--model gpt-6-astra --effort xhigh`) | gpt-6-astra |
-| Codex cold-read adversarial review | `driver.sh review <impl-brief>` (= `--fresh --model gpt-6-astra --effort xhigh`, no `--write`) | gpt-6-astra |
-| Design review of a concurrency brief (flow step 0) | Codex `run`, `--fresh --model gpt-6-astra --effort xhigh`, no `--write` | gpt-6-astra |
+| Orchestration / adjudication / host gates / keepalive | main session itself | Opus 5.5 (session model) |
+| Implementation / refactor / test fixing | Codex `run --write` (= `--model gpt-6-astra --effort xhigh`) | gpt-6-astra xhigh |
+| Exploration / locating / audits / spec extraction | Codex `run`, read-only brief, no `--write` | gpt-6-astra xhigh |
+| Routine cold-read review | `driver.sh review <impl-brief>` (= `--fresh --model gpt-6-astra --effort xhigh`, no `--write`) | gpt-6-astra xhigh |
+| Important review (flow step 0 design review, concurrency / safety / shared-authority waves, stop-rule re-review, pre-irreversible acceptance) | `driver.sh review <impl-brief> --effort max`; design review: `run <brief> --fresh --effort max`, no `--write` | gpt-6-astra max |
+| Cross-family leg of important diff reviews (not fix rounds or design review) | `subagent_type: reviewer`, no model or effort param | Sonnet 5.5 at `max` (both pinned in frontmatter) |
+| Exception: host-side judgment (device acceptance, gate-failure triage) | general-purpose + `model: sonnet` | sonnet = Sonnet 5.5 |
 
 **Context windows**: the whole Claude 5 family (Opus 5.5, Sonnet 5.5, …) runs
 the **1M token window natively** on the Anthropic API — there is no `[1m]`
@@ -505,8 +617,8 @@ target since Claude Code 2.1.219.)
   driver prints the command when needed).
 - **The Agent tool's model parameter takes aliases only**
   (sonnet/opus/haiku/fable); full model IDs are rejected by the schema
-  (tested). Pinning an exact version requires a custom agent's frontmatter
-  (that is what reviewer does). Newly created agent definitions are **not
+  (tested). Pinning an exact version requires a custom agent's frontmatter;
+  reviewer pins its model alias and `effort` there instead of per call. Newly created agent definitions are **not
   discovered immediately** — the registry refreshed only later in the
   authoring session (and reliably at the next session).
 - **Never set `CLAUDE_CODE_SUBAGENT_MODEL`**: it is the highest-priority source
@@ -550,9 +662,11 @@ target since Claude Code 2.1.219.)
 | `driver.sh review`: "implementer reply not found" | The implementation ran before the `.reply.md` mechanism, or the run failed — pass `--reply <file>` holding the final assistant message (the last `Assistant message` block of `.result.md`) |
 | Second rejection of the same kind on the same subsystem | Stop point fixes — dispatch the full-enumeration task (flow step 3, stop rule) |
 | `--effort max` refused by the driver | Companion allowlist unpatched — run the printed `sed` command once (re-run after plugin updates), or use `xhigh` |
-| Task fails immediately at `max` effort (HTTP 400 from backend) | The relay/backend doesn't support `max` — fall back to `xhigh` |
+| Task fails immediately at `max` effort (HTTP 400 from backend) | The relay/backend doesn't support `max` for that model — fall back to `xhigh` (astra) and record it in the tier section; for an important review, `--model gpt-5.6-sol --effort max` is the next option |
 | Task fails immediately with `--model gpt-6-astra` | The relay/backend doesn't serve astra — fall back to gpt-5.6-sol: `driver.sh run ... --model gpt-5.6-sol --effort xhigh` for implementation, `driver.sh review ... --model gpt-5.6-sol --effort max` (then `xhigh`) for reviews |
-| Codex hits Gradle `SocketException: Operation not permitted` | Sandbox forbids loopback — expected. Codex compiles and tests with the direct toolchain (self-check clause); gates are re-run by the verification subagent on the host |
+| Codex hits Gradle `SocketException: Operation not permitted` | Sandbox forbids loopback — expected. Codex compiles and tests with the direct toolchain (self-check clause); the host gate (main-session background shell) runs the build tool |
 | Codex finished but no files changed | `--write` was missing. Write a small brief saying "apply the changes", then `driver.sh run <that-file> --resume --write` to continue the thread |
 | `status` can't find a just-launched task | Wrong cwd — return to the project directory the task was launched from |
 | Background shell shows "No output available" while the task runs | The launch was piped through `tail`/`head`, which buffer until EOF — the task is fine. Watch the brief's `.result.md` instead (streamed in real time); launch bare next time |
+| Keepalive keeps pinging after the run finished | The watcher died without writing its `finished` marker (dead shell), so the `.result.md` still reads as in flight — TaskStop the monitor, then the interruption recipe. Runs launched with `--foreground` write no markers at all; don't list their briefs |
+| No `[keepalive] ping` turns in the transcript across an idle wait (monitor still armed) | Monitor events are not waking the idle session on this Claude Code version — switch to the `Bash run_in_background` fallback (`keepalive --pings 1`, re-armed per wake) |

@@ -11,6 +11,10 @@
 #                                    # generate the adversarial review brief from an implementation brief + its
 #                                    # .reply.md, then launch it read-only (default: --fresh gpt-6-astra xhigh)
 #   driver.sh watch <task-file.md> [job-id]   # re-attach a watcher to a running job
+#   driver.sh keepalive [--interval S] [--pings N] [<task-file.md> ...]
+#                                    # prompt-cache keepalive for the Monitor tool: one stdout line every
+#                                    # S seconds (default 290), N lines max (default 6 = one 30-min Monitor);
+#                                    # exits early once every listed task's run has finished
 #   driver.sh <subcommand> [...]   # passthrough: status / result / cancel / task-resume-candidate ...
 #
 # run defaults: --fresh --model gpt-6-astra --effort xhigh (fallback if the relay
@@ -281,6 +285,22 @@ EOF
   } > "$out"
 }
 
+# Whether a task file's latest run is still in flight, judged from the driver
+# markers in its .result.md alone (no companion call, so it works from any cwd).
+# The last marker after the last run header wins: job-id / re-attach → running;
+# finished / lost track / unreadable result / launch failure → done. A watcher
+# killed without writing a marker reads as running — keepalive's ping cap
+# bounds that case.
+run_state() {
+  local result_file="${1%.md}.result.md"
+  [[ -f "$result_file" ]] || { echo done; return; }
+  awk '
+    /^===== fable-gpt run / { s = "running" }
+    /^\[driver\] (job-id: |re-attaching watcher)/ { s = "running" }
+    /^\[driver\] (job [^ ]+ finished: |ERROR: lost track|WARNING: could not read job result|launch failed|could not parse jobId)/ { s = "done" }
+    END { print (s == "" ? "done" : s) }' "$result_file"
+}
+
 if [[ "$1" == "run" ]]; then
   shift
   task_file="$1"; shift
@@ -328,12 +348,12 @@ if [[ "$1" == "run" ]]; then
   fi
 
   launch_json=$(node "$companion" task --background --json "${flags[@]}" --prompt-file "$task_file" 2>>"$result_file") || {
-    echo "[driver] launch failed:" >&2
+    echo "[driver] launch failed:" | tee -a "$result_file" >&2
     printf '%s\n' "$launch_json" | tee -a "$result_file" >&2
     exit 1
   }
   job_id=$(printf '%s' "$launch_json" | python3 -c 'import json,sys; print(json.load(sys.stdin)["jobId"])') || {
-    echo "[driver] could not parse jobId from launch output:" >&2
+    echo "[driver] could not parse jobId from launch output:" | tee -a "$result_file" >&2
     printf '%s\n' "$launch_json" | tee -a "$result_file" >&2
     exit 1
   }
@@ -404,6 +424,46 @@ elif [[ "$1" == "watch" ]]; then
   fi
   echo "[driver] re-attaching watcher to job $job_id (streaming new log bytes only)" | tee -a "$result_file"
   watch_job "$job_id" "$result_file" "$reply_file" 1
+elif [[ "$1" == "keepalive" ]]; then
+  # Prompt-cache keepalive (5-minute TTL): meant as a Monitor command, where
+  # every stdout line wakes the idle main session for one cheap cache-reading
+  # turn. Pings run on a fixed schedule, so the gap between the last cache
+  # touch and the next ping never exceeds the interval. With task files given,
+  # it polls their run state every 15s and exits with one line once all have
+  # finished (the run's own watcher delivers the result notification).
+  shift
+  interval=290
+  pings=6
+  tasks=()
+  while [[ $# -gt 0 ]]; do
+    case "$1" in
+      --interval) interval="$2"; shift 2 ;;
+      --pings) pings="$2"; shift 2 ;;
+      *) tasks+=("$1"); shift ;;
+    esac
+  done
+  running_count() {
+    local n=0 t
+    for t in "${tasks[@]}"; do
+      [[ "$(run_state "$t")" == "running" ]] && n=$((n + 1))
+    done
+    echo "$n"
+  }
+  for ((i = 1; i <= pings; i++)); do
+    deadline=$((SECONDS + interval))
+    while ((SECONDS < deadline)); do
+      if [[ ${#tasks[@]} -gt 0 && "$(running_count)" == "0" ]]; then
+        echo "[keepalive] watched runs finished — keepalive stopped"
+        exit 0
+      fi
+      left=$((deadline - SECONDS))
+      sleep $((left < 15 ? left : 15))
+    done
+    line="[keepalive] ping $i/$pings $(date '+%H:%M:%S')"
+    [[ ${#tasks[@]} -gt 0 ]] && line="$line — $(running_count)/${#tasks[@]} run(s) in flight"
+    [[ "$i" -eq "$pings" ]] && line="$line — last ping of this arm"
+    echo "$line"
+  done
 elif [[ "$1" == "_render" ]]; then
   # Test hook: render `companion result --json` (stdin) for a task file.
   shift
