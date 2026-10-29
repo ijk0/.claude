@@ -11,10 +11,12 @@
 #                                    # generate the adversarial review brief from an implementation brief + its
 #                                    # .reply.md, then launch it read-only (default: --fresh gpt-6-astra xhigh)
 #   driver.sh watch <task-file.md> [job-id]   # re-attach a watcher to a running job
-#   driver.sh keepalive [--interval S] [--pings N] [<task-file.md> ...]
-#                                    # prompt-cache keepalive for the Monitor tool: one stdout line every
-#                                    # S seconds (default 290), N lines max (default 6 = one 30-min Monitor);
-#                                    # exits early once every listed task's run has finished
+#   driver.sh keepalive [--interval S] [--pings N] [--window S] [<task-file.md> ...]
+#                                    # prompt-cache keepalive for the Monitor tool: one stdout line once the
+#                                    # main session has made no request for S seconds (default 290); at most
+#                                    # N consecutive idle pings (default 11); one arm lasts at most --window
+#                                    # (default 1740 s, inside Monitor's 30 min); exits early once every
+#                                    # listed task's run has finished
 #   driver.sh <subcommand> [...]   # passthrough: status / result / cancel / task-resume-candidate ...
 #
 # run defaults: --fresh --model gpt-6-astra --effort xhigh (fallback if the relay
@@ -285,22 +287,6 @@ EOF
   } > "$out"
 }
 
-# Whether a task file's latest run is still in flight, judged from the driver
-# markers in its .result.md alone (no companion call, so it works from any cwd).
-# The last marker after the last run header wins: job-id / re-attach → running;
-# finished / lost track / unreadable result / launch failure → done. A watcher
-# killed without writing a marker reads as running — keepalive's ping cap
-# bounds that case.
-run_state() {
-  local result_file="${1%.md}.result.md"
-  [[ -f "$result_file" ]] || { echo done; return; }
-  awk '
-    /^===== fable-gpt run / { s = "running" }
-    /^\[driver\] (job-id: |re-attaching watcher)/ { s = "running" }
-    /^\[driver\] (job [^ ]+ finished: |ERROR: lost track|WARNING: could not read job result|launch failed|could not parse jobId)/ { s = "done" }
-    END { print (s == "" ? "done" : s) }' "$result_file"
-}
-
 if [[ "$1" == "run" ]]; then
   shift
   task_file="$1"; shift
@@ -425,45 +411,130 @@ elif [[ "$1" == "watch" ]]; then
   echo "[driver] re-attaching watcher to job $job_id (streaming new log bytes only)" | tee -a "$result_file"
   watch_job "$job_id" "$result_file" "$reply_file" 1
 elif [[ "$1" == "keepalive" ]]; then
-  # Prompt-cache keepalive (5-minute TTL): meant as a Monitor command, where
-  # every stdout line wakes the idle main session for one cheap cache-reading
-  # turn. Pings run on a fixed schedule, so the gap between the last cache
-  # touch and the next ping never exceeds the interval. With task files given,
-  # it polls their run state every 15s and exits with one line once all have
-  # finished (the run's own watcher delivers the result notification).
+  # Prompt-cache keepalive (5-minute TTL), meant as a Monitor command: every
+  # stdout line wakes the idle main session for one cache-reading turn.
+  # Activity-aware: it tails this session's transcript, whose api-request
+  # entries are stamped at request start (= when the cache is read and its TTL
+  # restarts), and pings only once no main-session request has started for
+  # --interval seconds — a busy session is never pinged. Without a readable
+  # transcript it degrades to a fixed schedule from the arm time.
+  # --pings caps CONSECUTIVE idle pings (ski-rental break-even ≈ 11); a request
+  # that isn't a ping's own resets the count. With task files given, it exits
+  # once every listed run has finished (judged from the driver markers in each
+  # .result.md, so it works from any cwd). An arm ends after --window seconds
+  # (Monitor caps at 30 min) with a line naming the budget left for a re-arm.
   shift
-  interval=290
-  pings=6
-  tasks=()
-  while [[ $# -gt 0 ]]; do
-    case "$1" in
-      --interval) interval="$2"; shift 2 ;;
-      --pings) pings="$2"; shift 2 ;;
-      *) tasks+=("$1"); shift ;;
-    esac
-  done
-  running_count() {
-    local n=0 t
-    for t in "${tasks[@]}"; do
-      [[ "$(run_state "$t")" == "running" ]] && n=$((n + 1))
-    done
-    echo "$n"
-  }
-  for ((i = 1; i <= pings; i++)); do
-    deadline=$((SECONDS + interval))
-    while ((SECONDS < deadline)); do
-      if [[ ${#tasks[@]} -gt 0 && "$(running_count)" == "0" ]]; then
-        echo "[keepalive] watched runs finished — keepalive stopped"
-        exit 0
-      fi
-      left=$((deadline - SECONDS))
-      sleep $((left < 15 ? left : 15))
-    done
-    line="[keepalive] ping $i/$pings $(date '+%H:%M:%S')"
-    [[ ${#tasks[@]} -gt 0 ]] && line="$line — $(running_count)/${#tasks[@]} run(s) in flight"
-    [[ "$i" -eq "$pings" ]] && line="$line — last ping of this arm"
-    echo "$line"
-  done
+  exec python3 -c '
+import glob, json, os, re, sys, time
+from datetime import datetime
+
+interval, budget, window, tasks = 290.0, 11, 1740.0, []
+args = sys.argv[1:]
+while args:
+    a = args.pop(0)
+    if a == "--interval": interval = float(args.pop(0))
+    elif a == "--pings": budget = int(args.pop(0))
+    elif a == "--window": window = float(args.pop(0))
+    else: tasks.append(a)
+
+def say(msg):
+    print("[keepalive] " + msg, flush=True)
+
+# <config dir>/projects/<cwd slug>/<session id>.jsonl
+transcript = None
+sid = os.environ.get("CLAUDE_CODE_SESSION_ID", "")
+if sid:
+    base = os.environ.get("CLAUDE_CONFIG_DIR") or os.path.expanduser("~/.claude")
+    hits = glob.glob(os.path.join(base, "projects", "*", sid + ".jsonl"))
+    transcript = hits[0] if hits else None
+t_off = os.path.getsize(transcript) if transcript else 0
+t_buf = b""
+
+def new_requests():
+    """Start times of main-session API requests logged since the last call."""
+    global t_off, t_buf
+    if not transcript:
+        return []
+    try:
+        with open(transcript, "rb") as f:
+            f.seek(0, 2)
+            if f.tell() < t_off:
+                t_off, t_buf = f.tell(), b""
+            f.seek(t_off)
+            data = f.read()
+            t_off = f.tell()
+    except OSError:
+        return []
+    lines = (t_buf + data).split(b"\n")
+    t_buf = lines.pop()
+    out = []
+    for ln in lines:
+        if b"\"type\":\"api-request\"" in ln:
+            try:
+                ts = json.loads(ln)["timestamp"]
+                out.append(datetime.fromisoformat(ts.replace("Z", "+00:00")).timestamp())
+            except Exception:
+                pass
+    return out
+
+# Last driver marker wins: run header / job-id / re-attach -> in flight;
+# finished / lost track / unreadable result / launch failure -> done.
+MARK = re.compile(rb"^(===== fable-gpt run |\[driver\] (job-id: |re-attaching watcher|job \S+ finished: |ERROR: lost track|WARNING: could not read job result|launch failed|could not parse jobId))", re.M)
+RUNNING = (b"=====", b"[driver] job-id: ", b"[driver] re-attaching")
+state = {}
+
+def in_flight(task):
+    result = re.sub(r"\.md$", "", task) + ".result.md"
+    try:
+        with open(result, "rb") as f:
+            f.seek(0, 2)
+            f.seek(max(0, f.tell() - 262144) if task in state else 0)
+            data = f.read()
+    except OSError:
+        return False
+    last = None
+    for m in MARK.finditer(data):
+        last = m.group(0)
+    if last is not None:
+        state[task] = last.startswith(RUNNING)
+    return state.get(task, False)
+
+start = time.time()
+last_touch = start  # the arming turn reads the cache right after this starts
+last_ping = None
+idle = 0
+if not transcript:
+    say("session transcript not found — fixed %ds schedule" % interval)
+while True:
+    for t in new_requests():
+        last_touch = max(last_touch, t)
+        if last_ping is not None and t > last_ping + min(60.0, interval / 2):
+            idle = 0  # real activity, not the ping turn itself
+    flying = sum(in_flight(t) for t in tasks)
+    if tasks and not flying:
+        say("watched runs finished — keepalive stopped")
+        break
+    now = time.time()
+    due = last_touch + interval
+    if now >= due:
+        idle += 1
+        last_ping = last_touch = now
+        line = "ping %d/%d %s" % (idle, budget, time.strftime("%H:%M:%S"))
+        if tasks:
+            line += " — %d/%d run(s) in flight" % (flying, len(tasks))
+        if idle >= budget:
+            say(line + " — idle budget spent; keepalive stopped")
+            break
+        if now + interval - start > window:
+            say(line + " — arm window ends; to keep waiting re-arm with --pings %d" % (budget - idle))
+            break
+        say(line)
+        continue
+    if now - start >= window:
+        say("arm window over — to keep waiting re-arm with --pings %d" % (budget - idle))
+        break
+    time.sleep(max(0.05, min(5.0, due - now)))
+' "$@"
 elif [[ "$1" == "_render" ]]; then
   # Test hook: render `companion result --json` (stdin) for a task file.
   shift

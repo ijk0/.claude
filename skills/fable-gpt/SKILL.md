@@ -1,6 +1,6 @@
 ---
 name: fable-gpt
-description: Fable-GPT orchestration workflow — the main agent (Opus 5.5) only dispatches and adjudicates; Codex (gpt-6-astra) does the work — implementation/debugging/refactoring at xhigh, read-only exploration and audits, cold-read reviews at xhigh (important reviews: astra max + a Sonnet-max reviewer subagent); Claude subagents are otherwise the exception; host gates run from the main session; a Monitor keepalive pings every 290s so the 5-minute prompt cache survives Codex waits. Use when orchestrating multi-agent work; when delegating implementation, debugging, refactoring, or test-fixing to Codex; when launching, resuming, monitoring, or cancelling a codex-companion task; or when the user says use Codex / run a Codex task / Fable-GPT. Also covers program-scale campaigns (scope manifest, risk-ordered waves, wave gates, inventory approval for irreversible steps, docs closeout).
+description: Fable-GPT orchestration workflow — the main agent (Opus 5.5) only dispatches and adjudicates; Codex (gpt-6-astra) does the work — implementation/debugging/refactoring at xhigh, read-only exploration and audits, cold-read reviews at xhigh (important reviews: astra max + a Sonnet-max reviewer subagent); Claude subagents are otherwise the exception; host gates run from the main session; a Monitor keepalive pings after 290s without a request so the 5-minute prompt cache survives Codex waits. Use when orchestrating multi-agent work; when delegating implementation, debugging, refactoring, or test-fixing to Codex; when launching, resuming, monitoring, or cancelling a codex-companion task; or when the user says use Codex / run a Codex task / Fable-GPT. Also covers program-scale campaigns (scope manifest, risk-ordered waves, wave gates, inventory approval for irreversible steps, docs closeout).
 ---
 
 # Fable-GPT: the main session orchestrates, Codex executes
@@ -259,8 +259,9 @@ The main session's prompt cache has a **5-minute TTL**, refreshed by every
 request that reads it. A Codex run leaves the session idle for 15–60 minutes;
 with no request in between, the completion turn re-reads the whole context
 uncached — a cache write at 1.25× base input price instead of a 0.1× read,
-plus a slow cold prefill on a large context. One ping turn every **290 s
-(4 min 50 s)** keeps it warm at about 0.1× per ping.
+plus a slow cold prefill on a large context. A ping turn once the session
+has made **no request for 290 s (4 min 50 s)** keeps it warm at about 0.1×
+per ping; a session that is active anyway is never pinged.
 
 **Mechanism: the Monitor tool running `driver.sh keepalive`.** Every stdout
 line is one event, and each event wakes the idle session for one turn — no
@@ -274,40 +275,51 @@ Monitor  description: "fable-gpt cache keepalive"   timeout_ms: 1800000
          command: ~/.claude/skills/fable-gpt/driver.sh keepalive ~/.claude/fable-gpt/briefs/<project-dir-name>/<timestamp>-<task>.md [<more briefs>]
 ```
 
-- Pings run on a fixed 290 s schedule from the arm time. The arming turn's
-  last request comes after the arm, and any later activity only touches the
-  cache more recently, so the gap from the last touch to the next ping stays
-  at or under 291 s (integer-second timer) — 9 s of margin.
+- **Activity-aware.** The script tails this session's transcript
+  (`<config dir>/projects/*/$CLAUDE_CODE_SESSION_ID.jsonl`). Claude Code
+  logs every main-session request there as an `api-request` entry stamped
+  at request start, which is when the cache is read and its TTL restarts.
+  A ping fires only once no request has started for 290 s, within about
+  0.1 s of that mark (10 s margin). User turns, tool loops and notifications
+  all push the next ping back. Without the transcript (variable unset, or a
+  Claude Code version that doesn't log `api-request`) it degrades to a
+  fixed 290 s schedule from the arm time and says so in its first line.
 - With briefs listed, the keepalive reads each brief's `.result.md` run
-  markers every 15 s (file-only — no companion call, works from any cwd) and
-  exits with one line once every listed run has finished; the run's own
+  markers (file-only — no companion call, works from any cwd) and exits with
+  one line within 5 s of every listed run finishing; the run's own
   background shell delivers the result notification. With no briefs (e.g. a
-  long host gate) it is a plain timer — TaskStop it when the awaited
-  notification arrives.
+  long host gate) it runs until its budget or window ends — TaskStop it
+  when the awaited notification arrives.
 - **One keepalive per session.** When another run launches mid-wait,
   TaskStop the current monitor and arm a new one listing every in-flight
   brief.
 
 **Ping-turn protocol.** On a `[keepalive] ping` event: no tool calls, no
 reads, no status checks — end the turn with at most one short line (e.g.
-`keepalive 3/6`). The ping exists only to send one request; work in it costs
-output tokens and context growth. Ignore the `watched runs finished` event —
-the completion notification carries the result.
+`keepalive 3/11`). The ping exists only to send one request; work in it
+costs output tokens and context growth. Ignore the `watched runs finished`
+and `idle budget spent` events — the completion notification carries the
+result. The one exception is the arm-end line (below), which asks for a
+re-arm.
 
 **Cap (ski rental).** Each ping costs about 0.1 × C (C = the cost of the
 context as uncached input); letting the cache lapse costs about 1.15 × C once
 (1.25 write − 0.1 read). Break-even is about 11 pings ≈ 53 min: ping up to
 that, then stop — worst case about twice the better choice in hindsight, with
-no need to predict the run length. Concretely: the default arm is 6 pings
-(29 min, fits one 30-minute Monitor); on its `last ping of this arm` line with
-runs still in flight, arm once more with `--pings 5`; after that let the
-cache lapse. Skip the keepalive entirely when the wait is known to exceed an
-hour (overnight wave, user away) or when the wait is on the user rather than
-on a job.
+no need to predict the run length. The script enforces it: `--pings`
+(default 11) caps **consecutive** idle pings, and any request that isn't a
+ping turn's own resets the count. Each arm lasts at most 29 min
+(`--window 1740`, inside Monitor's 30-minute cap); it ends with a line
+naming the budget left (`… re-arm with --pings N`) — if runs are still in
+flight, re-arm with exactly that. After `idle budget spent` the cache is
+left to lapse, so don't re-arm. Skip the keepalive entirely when the wait is
+known to exceed an hour (overnight wave, user away) or when the wait is on
+the user rather than on a job.
 
 Fallback if the Monitor tool is unavailable: `driver.sh keepalive --pings 1
-<briefs>` via `Bash run_in_background`, re-armed with one call per wake — two
-requests per ping instead of one, same cap.
+<briefs>` via `Bash run_in_background` exits at its first ping (its line
+then reads `idle budget spent`). Re-arm it once per wake, counting pings
+yourself up to 11. That costs two requests per ping instead of one.
 
 ### After an interruption (compaction, /clear, dead shell)
 
