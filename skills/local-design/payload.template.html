@@ -1,0 +1,971 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'unsafe-inline' 'unsafe-eval' http: https:; style-src 'unsafe-inline' http: https:; img-src data: blob: http: https:; font-src data: http: https:; media-src data: blob: http: https:; connect-src http: https: ws: wss:; frame-src http: https:; base-uri 'none'">
+<meta name="generator" content="local-design canvas">
+<title>__LD_TITLE__</title>
+<!--__LD_README__-->
+<style>
+  :root {
+    --ld-bg: #e7e6e3; --ld-dot: #d0cec9; --ld-chrome: #fbfbfa; --ld-ink: #1e1e1c; --ld-muted: #6b6964;
+    --ld-line: #dad8d3; --ld-accent: #3158d4; --ld-danger: #c2362b; --ld-note: #fdf0a6; --ld-note-ink: #3b3417;
+    --ld-shadow: 0 1px 2px rgba(0,0,0,.07), 0 10px 30px rgba(0,0,0,.09);
+    color-scheme: light;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --ld-bg: #19191b; --ld-dot: #2b2b2f; --ld-chrome: #232326; --ld-ink: #ebebe8; --ld-muted: #98968f;
+      --ld-line: #36363a; --ld-accent: #85a5ff; --ld-danger: #ff8a7d; --ld-note: #5a5122; --ld-note-ink: #faf2c8;
+      --ld-shadow: 0 1px 2px rgba(0,0,0,.4), 0 10px 30px rgba(0,0,0,.35);
+      color-scheme: dark;
+    }
+  }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; height: 100%; overflow: hidden; background: var(--ld-bg); color: var(--ld-ink);
+    font: 13px/1.4 -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, sans-serif; -webkit-font-smoothing: antialiased; }
+  button, select, input { font: inherit; color: inherit; }
+  #ld-bar { position: fixed; inset: 0 0 auto 0; height: 46px; display: flex; align-items: center; gap: 10px;
+    padding: 0 12px; background: var(--ld-chrome); border-bottom: 1px solid var(--ld-line); z-index: 20; }
+  #ld-title { margin: 0; font-size: 13px; font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 32vw; }
+  #ld-bar .ld-grow { flex: 1; }
+  .ld-btn { display: inline-flex; align-items: center; justify-content: center; gap: 6px; height: 28px; min-width: 28px;
+    padding: 0 8px; border: 1px solid var(--ld-line); border-radius: 7px; background: transparent; cursor: pointer; }
+  .ld-btn:hover { background: color-mix(in oklab, var(--ld-ink) 7%, transparent); }
+  .ld-btn:focus-visible, select:focus-visible { outline: 2px solid var(--ld-accent); outline-offset: 1px; }
+  .ld-btn svg { width: 16px; height: 16px; stroke: currentColor; fill: none; stroke-width: 1.6; stroke-linecap: round; stroke-linejoin: round; }
+  #ld-pages { height: 28px; border: 1px solid var(--ld-line); border-radius: 7px; background: var(--ld-chrome); padding: 0 6px; }
+  #ld-zoom { min-width: 48px; text-align: center; color: var(--ld-muted); font-variant-numeric: tabular-nums; }
+  .ld-badge { color: var(--ld-muted); font-size: 12px; white-space: nowrap; }
+  #ld-exname { font-weight: 600; white-space: nowrap; }
+  #ld-exmeta { color: var(--ld-muted); font-variant-numeric: tabular-nums; white-space: nowrap; }
+  [hidden] { display: none !important; }
+
+  #ld-stage { position: fixed; inset: 46px 0 0 0; overflow: hidden; touch-action: none; cursor: default;
+    background-color: var(--ld-bg); background-image: radial-gradient(var(--ld-dot) 1px, transparent 1.2px); background-size: 22px 22px; }
+  body.ld-panning #ld-stage, body.ld-space #ld-stage { cursor: grabbing; }
+  #ld-world { position: absolute; left: 0; top: 0; transform-origin: 0 0; --z: 1; --inv: 1; }
+  .ld-board { position: absolute; }
+  .ld-head { position: absolute; left: 0; bottom: 100%; width: calc(var(--bw) * var(--z) * 1px); min-width: 160px;
+    transform: scale(var(--inv)); transform-origin: 0 100%; padding-bottom: 7px; display: flex; flex-direction: column; gap: 6px; }
+  .ld-strip { display: flex; align-items: center; gap: 8px; min-width: 0; height: 20px; cursor: grab; user-select: none; }
+  .ld-name { font-weight: 600; font-size: 12px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .ld-size { color: var(--ld-muted); font-size: 11px; white-space: nowrap; font-variant-numeric: tabular-nums; }
+  .ld-err { color: #fff; background: var(--ld-danger); border-radius: 9px; font-size: 10px; font-weight: 700; padding: 0 6px; line-height: 16px; cursor: help; }
+  .ld-strip .ld-grow { flex: 1; }
+  .ld-strip .ld-btn { height: 20px; min-width: 20px; padding: 0 3px; border-color: transparent; opacity: .55; }
+  .ld-strip .ld-btn:hover { opacity: 1; }
+  .ld-strip .ld-btn svg { width: 14px; height: 14px; }
+  .ld-board.is-selected .ld-name { color: var(--ld-accent); }
+  .ld-frame { position: relative; background: #fff; box-shadow: var(--ld-shadow); }
+  .ld-board.is-selected .ld-frame { outline: calc(2px * var(--inv)) solid var(--ld-accent); outline-offset: calc(1px * var(--inv)); }
+  .ld-frame iframe { display: block; border: 0; background: transparent; }
+  .ld-shield { position: absolute; inset: 0; }
+  .ld-board.is-selected .ld-shield { display: none; }
+  body.ld-space .ld-shield, body.ld-panning .ld-shield { display: block !important; }
+  .ld-chips { display: flex; flex-wrap: wrap; gap: 5px; }
+  .ld-chip { display: inline-flex; align-items: center; gap: 6px; height: 24px; padding: 0 8px; border-radius: 12px;
+    background: var(--ld-chrome); border: 1px solid var(--ld-line); font-size: 11px; white-space: nowrap; }
+  .ld-chip > span { color: var(--ld-muted); }
+  .ld-chip input[type=color] { width: 18px; height: 18px; padding: 0; border: 0; background: none; cursor: pointer; }
+  .ld-chip input[type=number] { width: 58px; height: 18px; border: 1px solid var(--ld-line); border-radius: 5px; background: transparent; padding: 0 4px; }
+  .ld-chip input[type=range] { width: 90px; }
+  .ld-chip input[type=text] { width: 120px; height: 18px; border: 1px solid var(--ld-line); border-radius: 5px; background: transparent; padding: 0 4px; }
+  .ld-chip textarea { font: inherit; font-size: 11px; width: 160px; height: 34px; border: 1px solid var(--ld-line); border-radius: 5px; background: transparent; padding: 1px 4px; font-size: 11px; resize: both; }
+  .ld-chip:has(textarea) { height: auto; padding: 4px 8px; border-radius: 10px; }
+  .ld-chip select { height: 18px; border: 1px solid var(--ld-line); border-radius: 5px; background: var(--ld-chrome); }
+  .ld-swatch { width: 14px; height: 14px; border-radius: 50%; border: 1px solid rgba(0,0,0,.2); padding: 0; cursor: pointer; }
+  .ld-note { position: absolute; background: var(--ld-note); color: var(--ld-note-ink); padding: 12px 14px; border-radius: 3px;
+    box-shadow: var(--ld-shadow); white-space: pre-wrap; overflow-wrap: anywhere; font-size: 14px; line-height: 1.45; }
+
+  body.ld-is-expanded #ld-stage { visibility: hidden; }
+  #ld-expanded { position: fixed; inset: 46px 0 0 0; overflow: auto; background: var(--ld-bg); z-index: 10; }
+  .ld-exframe { position: relative; margin: 24px auto; box-shadow: var(--ld-shadow); background: #fff; overflow: hidden; }
+  .ld-exframe.is-fill { margin: 0; box-shadow: none; }
+  .ld-exframe iframe { display: block; border: 0; transform-origin: 0 0; background: transparent; }
+</style>
+</head>
+<body>
+<header id="ld-bar">
+  <button class="ld-btn" id="ld-back" hidden title="Back to the canvas (Esc)"><svg viewBox="0 0 16 16"><path d="M10 3 5 8l5 5"/></svg>Canvas</button>
+  <h1 id="ld-title"></h1>
+  <select id="ld-pages" hidden aria-label="Page"></select>
+  <span id="ld-exnav" hidden>
+    <button class="ld-btn" id="ld-prev" title="Previous artboard (Left arrow)"><svg viewBox="0 0 16 16"><path d="M10 3 5 8l5 5"/></svg></button>
+    <span id="ld-exname"></span> <span id="ld-exmeta"></span>
+    <button class="ld-btn" id="ld-next" title="Next artboard (Right arrow)"><svg viewBox="0 0 16 16"><path d="m6 3 5 5-5 5"/></svg></button>
+  </span>
+  <span class="ld-grow"></span>
+  <span class="ld-badge" title="This canvas runs on this machine; ask Claude for changes and exports.">Local preview &middot; view only</span>
+  <span id="ld-zoomctl">
+    <button class="ld-btn" id="ld-zoomout" title="Zoom out (-)"><svg viewBox="0 0 16 16"><path d="M3.5 8h9"/></svg></button>
+    <span id="ld-zoom">100%</span>
+    <button class="ld-btn" id="ld-zoomin" title="Zoom in (+)"><svg viewBox="0 0 16 16"><path d="M3.5 8h9M8 3.5v9"/></svg></button>
+    <button class="ld-btn" id="ld-fit" title="Zoom to fit (0)">Fit</button>
+  </span>
+</header>
+<main id="ld-stage"><div id="ld-world"></div></main>
+<section id="ld-expanded" hidden></section>
+
+<script type="application/json" id="appifact-doc">__LD_STATE__</script>
+
+<script type="text/plain" id="dc-runtime">
+(function () {
+  'use strict';
+  var DC = window.__DC || {};
+  var FILES = DC.files || {};
+  var ASSETS = DC.assets || {};
+  var HTML_NS = 'http://www.w3.org/1999/xhtml';
+  var HOLE = /\{\{([\s\S]*?)\}\}/g;
+  var WHOLE = /^\s*\{\{([\s\S]*?)\}\}\s*$/;
+  var PATH = /^[$A-Za-z_][$\w]*(\.[$\w]+)*$/;
+  var embedded = window.parent !== window;
+  var seen = new Set();
+  var tweaks = DC.tweaks || {};
+  var root = null;
+  var rootMeta = {};
+
+  function post(msg) { if (embedded) { try { window.parent.postMessage(msg, '*'); } catch (e) { /* detached */ } } }
+  function report(err, quiet) {
+    var m = err && err.message ? err.message : String(err);
+    if (seen.has(m)) return;
+    seen.add(m);
+    if (!quiet) console.error('[design] ' + m);
+    post({ dc: 'error', message: m });
+  }
+  window.addEventListener('error', function (e) { if (e.message) report(e.message, true); });
+
+  class DCLogic {
+    constructor(props) { this.props = props || {}; this.state = {}; }
+    setState(patch, cb) {
+      var next = typeof patch === 'function' ? patch(this.state, this.props) : patch;
+      if (next) this.state = Object.assign({}, this.state, next);
+      if (this.__dc) this.__dc.schedule(cb);
+    }
+    forceUpdate(cb) { if (this.__dc) this.__dc.schedule(cb); }
+    renderVals() { return {}; }
+  }
+  window.DCLogic = DCLogic;
+
+  var own = Object.prototype.hasOwnProperty;
+  var LIT = { 'true': true, 'false': false, 'null': null, 'undefined': undefined };
+  function lookup(e, scope) {
+    if (own.call(LIT, e)) return LIT[e];
+    if (/^-?\d+(\.\d+)?$/.test(e)) return Number(e);
+    var q = e.match(/^(['"])([\s\S]*)\1$/);
+    if (q) return q[2];
+    if (!PATH.test(e)) { report('{{ ' + e + ' }} is not a dotted lookup - a hole cannot hold an expression; compute it in renderVals()'); return undefined; }
+    var segs = e.split('.');
+    var v = scope[segs[0]];
+    for (var i = 1; i < segs.length; i++) { if (v == null) return undefined; v = v[segs[i]]; }
+    return v;
+  }
+  function text(v) { return v == null ? '' : String(v); }
+  function parts(s) {
+    var out = [], last = 0;
+    s.replace(HOLE, function (m, e, i) { if (i > last) out.push(s.slice(last, i)); out.push({ e: e.trim() }); last = i + m.length; return m; });
+    if (last < s.length) out.push(s.slice(last));
+    return out;
+  }
+  function join(p, scope) { var s = ''; for (var i = 0; i < p.length; i++) s += typeof p[i] === 'string' ? p[i] : text(lookup(p[i].e, scope)); return s; }
+  function camel(n) { return n.replace(/-([a-z])/g, function (_, c) { return c.toUpperCase(); }); }
+  function attrName(n) { return n === 'classname' ? 'class' : n === 'htmlfor' ? 'for' : n; }
+  function evName(n) { n = n.toLowerCase(); return n === 'doubleclick' ? 'dblclick' : n; }
+  function asset(v) { var n = String(v).replace(/^\.\//, ''); return own.call(ASSETS, n) ? ASSETS[n] : v; }
+
+  function compileAttr(name, value, forProps) {
+    var w = value.match(WHOLE);
+    if (w && !forProps && /^on[a-z]/.test(name)) return { t: 'ev', n: evName(name.slice(2)), e: w[1].trim() };
+    var n = forProps ? camel(name) : attrName(name);
+    if (w) return { t: 'raw', n: n, e: w[1].trim() };
+    if (value.indexOf('{{') !== -1) return { t: 'int', n: n, p: parts(value) };
+    return { t: 'lit', n: n, v: value };
+  }
+  function compileNodes(list) { var out = []; for (var i = 0; i < list.length; i++) { var c = compile(list[i]); if (c) out.push(c); } return out; }
+  function compile(node) {
+    if (node.nodeType === 3) { var t = node.nodeValue; return t.indexOf('{{') === -1 ? { k: 'txt', s: t } : { k: 'txt', p: parts(t) }; }
+    if (node.nodeType !== 1) return null;
+    var tag = node.localName, i, a;
+    if (tag === 'helmet') return null;
+    var kids = compileNodes(tag === 'template' ? node.content.childNodes : node.childNodes);
+    if (tag === 'sc-for') {
+      var l = node.getAttribute('list') || '', lm = l.match(WHOLE);
+      if (!lm) report('<sc-for list="' + l + '"> needs list="{{ path }}"');
+      return { k: 'for', e: lm ? lm[1].trim() : 'undefined', as: node.getAttribute('as') || 'item', kids: kids };
+    }
+    if (tag === 'sc-if') {
+      var v = node.getAttribute('value') || '', vm = v.match(WHOLE);
+      return { k: 'if', e: vm ? vm[1].trim() : null, lit: v, kids: kids };
+    }
+    if (tag === 'dc-import') {
+      var props = [];
+      for (i = 0; i < node.attributes.length; i++) {
+        a = node.attributes[i];
+        if (a.name === 'name' || a.name.indexOf('hint-') === 0) continue;
+        props.push(compileAttr(a.name, a.value, true));
+      }
+      return { k: 'imp', name: node.getAttribute('name') || '', props: props };
+    }
+    var attrs = [];
+    for (i = 0; i < node.attributes.length; i++) {
+      a = node.attributes[i];
+      if (a.name.indexOf('hint-') === 0) continue;
+      attrs.push(compileAttr(a.name, a.value, false));
+    }
+    return { k: 'el', tag: tag, ns: node.namespaceURI, attrs: attrs, kids: kids };
+  }
+
+  function styleText(o) {
+    return Object.keys(o).map(function (k) {
+      var prop = k.indexOf('--') === 0 ? k : k.replace(/[A-Z]/g, function (c) { return '-' + c.toLowerCase(); });
+      return prop + ': ' + o[k];
+    }).join('; ');
+  }
+  function setAttr(el, a, scope) {
+    if (a.n === 'value') el.__dcValue = true;
+    if (a.n === 'checked') el.__dcChecked = true;
+    if (a.t === 'lit') { el.setAttribute(a.n, a.v); return; }
+    if (a.t === 'int') { el.setAttribute(a.n, join(a.p, scope)); return; }
+    var v = lookup(a.e, scope);
+    if (a.t === 'ev') {
+      if (typeof v === 'function') (el.__dcOn || (el.__dcOn = {}))[a.n] = v;
+      else if (v != null) report('on' + a.n + '="{{ ' + a.e + ' }}" is not a function - return a handler from renderVals()');
+      return;
+    }
+    if (a.n === 'ref') { el.__dcRef = v; return; }
+    if (a.n === 'style' && v && typeof v === 'object') { el.setAttribute('style', styleText(v)); return; }
+    if (typeof v === 'function' || (v && typeof v === 'object')) { (el.__dcProps || (el.__dcProps = {}))[a.n] = v; return; }
+    var ariaish = /^(aria|data)-/.test(a.n);
+    if (v == null || (v === false && !ariaish)) return;
+    if (v === true && !ariaish) { el.setAttribute(a.n, ''); return; }
+    if (a.n === 'src' || a.n === 'href' || a.n === 'poster') v = asset(v);
+    el.setAttribute(a.n, String(v));
+  }
+  function propsOf(list, scope) {
+    var p = {};
+    for (var i = 0; i < list.length; i++) {
+      var a = list[i];
+      p[a.n] = a.t === 'lit' ? a.v : a.t === 'int' ? join(a.p, scope) : lookup(a.e, scope);
+    }
+    return p;
+  }
+  function render(list, scope, out) {
+    for (var i = 0; i < list.length; i++) {
+      var d = list[i];
+      if (d.k === 'txt') out.push(document.createTextNode(d.p ? join(d.p, scope) : d.s));
+      else if (d.k === 'for') {
+        var arr = lookup(d.e, scope);
+        if (arr == null) continue;
+        if (!Array.isArray(arr)) { report('<sc-for list="{{ ' + d.e + ' }}"> is not an array'); continue; }
+        for (var j = 0; j < arr.length; j++) { var s = Object.create(scope); s[d.as] = arr[j]; s.$index = j; render(d.kids, s, out); }
+      } else if (d.k === 'if') {
+        var c = d.e != null ? lookup(d.e, scope) : d.lit;
+        if (c && c !== 'false') render(d.kids, scope, out);
+      } else if (d.k === 'imp') {
+        var h = document.createElement('dc-import');
+        h.setAttribute('name', d.name);
+        h.__dcImport = { name: d.name, props: propsOf(d.props, scope) };
+        out.push(h);
+      } else {
+        var el = d.ns && d.ns !== HTML_NS ? document.createElementNS(d.ns, d.tag) : document.createElement(d.tag);
+        for (var k = 0; k < d.attrs.length; k++) setAttr(el, d.attrs[k], scope);
+        var kids = [];
+        render(d.kids, scope, kids);
+        for (var m = 0; m < kids.length; m++) el.appendChild(kids[m]);
+        out.push(el);
+      }
+    }
+  }
+
+  // ---- reconcile fresh nodes into the live DOM so focus, inputs and transitions survive
+  function setRef(ref, el) {
+    if (!ref) return;
+    try { if (typeof ref === 'function') ref(el); else if (typeof ref === 'object') ref.current = el; } catch (e) { report(e); }
+  }
+  function dispatcher(el, ev) {
+    return function (e) { var f = el.__dcOn && el.__dcOn[ev]; if (typeof f === 'function') { try { f(e); } catch (x) { report(x); } } };
+  }
+  function bind(el) {
+    var on = el.__dcOn; if (!on) return;
+    var b = el.__dcBound || (el.__dcBound = {});
+    for (var ev in on) if (!b[ev]) { b[ev] = true; el.addEventListener(ev, dispatcher(el, ev)); }
+  }
+  function mount(node) {
+    if (node.nodeType !== 1) return;
+    if (node.localName === 'dc-import' && node.__dcImport) { mountImport(node); return; }
+    bind(node);
+    if (node.__dcProps) for (var k in node.__dcProps) node[k] = node.__dcProps[k];
+    if (node.__dcRef) setRef(node.__dcRef, node);
+    for (var c = node.firstChild; c; c = c.nextSibling) mount(c);
+  }
+  function unmount(node) {
+    if (node.nodeType !== 1) return;
+    if (node.__dcInst) { node.__dcInst.destroy(); return; }
+    if (node.__dcRef) setRef(node.__dcRef, null);
+    for (var c = node.firstChild; c; c = c.nextSibling) unmount(c);
+  }
+  function same(l, n) {
+    if (l.nodeType !== n.nodeType) return false;
+    if (l.nodeType === 3) return true;
+    if (l.nodeType !== 1 || l.localName !== n.localName || l.namespaceURI !== n.namespaceURI) return false;
+    return l.localName !== 'dc-import' || l.getAttribute('name') === n.getAttribute('name');
+  }
+  function patch(l, n) {
+    if (l.nodeType === 3) { if (l.nodeValue !== n.nodeValue) l.nodeValue = n.nodeValue; return; }
+    if (l.localName === 'dc-import') { if (l.__dcInst) l.__dcInst.setProps(n.__dcImport.props); else { l.__dcImport = n.__dcImport; mountImport(l); } return; }
+    var i, la = l.attributes, na = n.attributes;
+    for (i = la.length - 1; i >= 0; i--) if (!n.hasAttribute(la[i].name)) l.removeAttribute(la[i].name);
+    for (i = 0; i < na.length; i++) if (l.getAttribute(na[i].name) !== na[i].value) l.setAttribute(na[i].name, na[i].value);
+    if (n.__dcValue && 'value' in l) { var nv = n.getAttribute('value') || ''; if (l.value !== nv) l.value = nv; }
+    if (n.__dcChecked && 'checked' in l) l.checked = n.hasAttribute('checked');
+    l.__dcOn = n.__dcOn; bind(l);
+    if (n.__dcProps) for (var k in n.__dcProps) l[k] = n.__dcProps[k];
+    if (l.__dcRef !== n.__dcRef) { setRef(l.__dcRef, null); l.__dcRef = n.__dcRef; setRef(l.__dcRef, l); }
+    patchChildren(l, Array.prototype.slice.call(n.childNodes));
+  }
+  function patchChildren(live, next) {
+    for (var i = 0; i < next.length; i++) {
+      var n = next[i], l = live.childNodes[i];
+      if (!l) { live.appendChild(n); mount(n); }
+      else if (same(l, n)) patch(l, n);
+      else { live.replaceChild(n, l); unmount(l); mount(n); }
+    }
+    while (live.childNodes.length > next.length) { var last = live.lastChild; live.removeChild(last); unmount(last); }
+  }
+
+  function call(obj, name) {
+    if (typeof obj[name] !== 'function') return;
+    try { obj[name].apply(obj, Array.prototype.slice.call(arguments, 2)); } catch (e) { report(e); }
+  }
+  class Instance {
+    constructor(def, props, host) {
+      this.def = def; this.host = host; this.cbs = []; this.queued = false; this.mounted = false; this.dead = false;
+      var L = def.Logic || DCLogic;
+      try { this.logic = new L(props); } catch (e) { report(e); this.logic = new DCLogic(props); }
+      this.logic.props = props;
+      if (!this.logic.state || typeof this.logic.state !== 'object') this.logic.state = {};
+      this.logic.__dc = this;
+      this.prevProps = props; this.prevState = this.logic.state;
+    }
+    render() {
+      if (this.dead) return;
+      var vals = {};
+      try { vals = this.logic.renderVals() || {}; } catch (e) { report(e); }
+      var scope = Object.assign(Object.create(null), vals), out = [];
+      try { render(this.def.tpl, scope, out); } catch (e) { report(e); }
+      patchChildren(this.host, out);
+      if (!this.mounted) { this.mounted = true; call(this.logic, 'componentDidMount'); }
+      else call(this.logic, 'componentDidUpdate', this.prevProps, this.prevState);
+      this.prevProps = this.logic.props; this.prevState = this.logic.state;
+      var cbs = this.cbs; this.cbs = [];
+      for (var i = 0; i < cbs.length; i++) { try { cbs[i](); } catch (e) { report(e); } }
+    }
+    schedule(cb) {
+      if (typeof cb === 'function') this.cbs.push(cb);
+      if (this.queued) return;
+      this.queued = true;
+      var self = this;
+      queueMicrotask(function () { self.queued = false; self.render(); });
+    }
+    setProps(p) { this.logic.props = p; this.render(); }
+    destroy() {
+      this.dead = true;
+      call(this.logic, 'componentWillUnmount');
+      for (var c = this.host.firstChild; c; c = c.nextSibling) unmount(c);
+    }
+  }
+
+  function readMeta(script, file) {
+    var raw = script && script.getAttribute('data-props');
+    if (!raw) return {};
+    try { var m = JSON.parse(raw); return m && typeof m === 'object' ? m : {}; }
+    catch (e) { report(file + ': data-props is not valid JSON (' + e.message + ') - its tweaks are ignored'); return {}; }
+  }
+  function defaults(meta) {
+    var p = {};
+    for (var k in meta) if (k !== '$preview' && meta[k] && typeof meta[k] === 'object' && 'default' in meta[k]) p[k] = meta[k].default;
+    return p;
+  }
+  function hoist(scopeNode) {
+    var helmets = scopeNode.querySelectorAll('helmet');
+    for (var i = 0; i < helmets.length; i++) {
+      var kids = Array.prototype.slice.call(helmets[i].childNodes);
+      for (var j = 0; j < kids.length; j++) document.head.appendChild(document.importNode(kids[j], true));
+    }
+  }
+  var defs = {};
+  function substitute(src) {
+    src = src.replace(/(\s(?:src|href|poster)=)"(?:\.\/)?([^"\/?#]+)"/gi, function (m, a, n) { return own.call(ASSETS, n) ? a + '"' + ASSETS[n] + '"' : m; });
+    return src.replace(/url\(\s*(["']?)(?:\.\/)?([^"')\/?#]+)\1\s*\)/gi, function (m, q, n) { return own.call(ASSETS, n) ? 'url("' + ASSETS[n] + '")' : m; });
+  }
+  function defFor(name) {
+    if (own.call(defs, name)) return defs[name];
+    var file = name + '.dc.html';
+    if (!own.call(FILES, file)) { report('<dc-import name="' + name + '">: there is no ' + file + ' in this canvas'); return (defs[name] = null); }
+    var d = new DOMParser().parseFromString(substitute(FILES[file]), 'text/html');
+    var x = d.querySelector('x-dc');
+    if (!x) { report(file + ': no <x-dc> template'); return (defs[name] = null); }
+    hoist(x);
+    var script = d.querySelector('script[data-dc-script]');
+    var Logic;
+    if (script && script.textContent.trim()) {
+      try { Logic = new Function('DCLogic', script.textContent + '\n;return typeof Component !== "undefined" ? Component : undefined;')(DCLogic); }
+      catch (e) { report(file + ': logic script failed - ' + e.message); }
+    }
+    return (defs[name] = { tpl: compileNodes(x.childNodes), Logic: Logic, meta: readMeta(script, file) });
+  }
+  function mountImport(host) {
+    var info = host.__dcImport, def = defFor(info.name);
+    if (!def) return;
+    var props = Object.assign(defaults(def.meta), info.props);
+    host.__dcInst = new Instance(def, props, host);
+    host.__dcInst.render();
+  }
+
+  function rootProps() { return Object.assign(defaults(rootMeta), tweaks); }
+  function boot() {
+    var style = document.createElement('style');
+    style.textContent = 'dc-import{display:contents}';
+    document.head.appendChild(style);
+    var tpl = document.querySelector('template[data-x-dc]');
+    var script = document.querySelector('script[data-dc-script]');
+    rootMeta = readMeta(script, DC.entry || 'artboard');
+    if (tpl) {
+      hoist(tpl.content);
+      var Logic;
+      if (script && script.textContent.trim()) {
+        try { Logic = (0, eval)('typeof Component !== "undefined" ? Component : undefined'); } catch (e) { /* reported by the script itself */ }
+        if (!Logic) report((DC.entry || 'artboard') + ': its <script data-dc-script> defines no class Component extends DCLogic');
+      } else if (script) {
+        report((DC.entry || 'artboard') + ': an empty <script data-dc-script> - omit it on a static artboard');
+      }
+      var def = { tpl: compileNodes(tpl.content.childNodes), Logic: Logic, meta: rootMeta };
+      tpl.remove();
+      if (script) script.remove();
+      var host = document.body;
+      Array.prototype.slice.call(host.childNodes).forEach(function (n) { if (n.nodeType !== 1 || n.localName === 'script') host.removeChild(n); });
+      root = new Instance(def, rootProps(), host);
+      root.render();
+    }
+    var fonts = document.fonts ? document.fonts.ready : Promise.resolve();
+    fonts.then(function () {
+      requestAnimationFrame(function () { requestAnimationFrame(function () { window.__dcReady = true; post({ dc: 'ready' }); }); });
+    });
+  }
+  window.addEventListener('message', function (e) {
+    if (e.source !== window.parent || !e.data || e.data.dc !== 'props') return;
+    tweaks = e.data.values || {};
+    if (root) root.setProps(rootProps());
+  });
+  if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', boot); else boot();
+})();
+</script>
+
+<script>
+(() => {
+  'use strict';
+  const state = JSON.parse(document.getElementById('appifact-doc').textContent || '{}');
+  const files = state.files && typeof state.files === 'object' ? state.files : {};
+  const RUNTIME = document.getElementById('dc-runtime').textContent;
+  const TITLE = document.title;
+  const $ = (id) => document.getElementById(id);
+  const stage = $('ld-stage');
+  const world = $('ld-world');
+  const exBox = $('ld-expanded');
+  const own = (o, k) => Object.prototype.hasOwnProperty.call(o, k);
+
+  // ---------------------------------------------------------------- files -> artboards
+  const MIME = { png: 'image/png', jpg: 'image/jpeg', jpeg: 'image/jpeg', gif: 'image/gif', webp: 'image/webp', avif: 'image/avif',
+    bmp: 'image/bmp', svg: 'image/svg+xml', woff2: 'font/woff2', woff: 'font/woff', ttf: 'font/ttf', otf: 'font/otf' };
+  const ASSET = /\.(png|jpe?g|gif|webp|avif|bmp|svg|woff2?|ttf|otf)$/i;
+  const assets = {};
+  for (const [n, v] of Object.entries(files)) {
+    if (ASSET.test(n) && typeof v === 'string') assets[n] = `data:${MIME[n.split('.').pop().toLowerCase()]};base64,${v}`;
+  }
+  const isBoard = (n) => /\.dc\.html$/i.test(n) && typeof files[n] === 'string';
+  const stem = (f) => f.replace(/\.dc\.html$/i, '');
+  const scriptJson = (v) => JSON.stringify(v).replace(/</g, '\\u003c').replace(/\u2028/g, '\\u2028').replace(/\u2029/g, '\\u2029');
+
+  function substitute(src) {
+    src = src.replace(/(\s(?:src|href|poster)=)"(?:\.\/)?([^"\/?#]+)"/gi, (m, a, n) => (own(assets, n) ? `${a}"${assets[n]}"` : m));
+    return src.replace(/url\(\s*(["']?)(?:\.\/)?([^"')\/?#]+)\1\s*\)/gi, (m, q, n) => (own(assets, n) ? `url("${assets[n]}")` : m));
+  }
+  function importsOf(file, acc = new Set()) {
+    for (const m of files[file].matchAll(/<dc-import\b[^>]*\bname\s*=\s*["']([^"']+)["']/gi)) {
+      const f = `${m[1]}.dc.html`;
+      if (isBoard(f) && !acc.has(f)) { acc.add(f); importsOf(f, acc); }
+    }
+    return acc;
+  }
+  const SUPPORT = /<script\b[^>]*\bsrc\s*=\s*["']\.\/support\.js["'][^>]*>\s*<\/script>/i;
+  const CSP = document.querySelector('meta[http-equiv="Content-Security-Policy"]').outerHTML;
+  function resolve(file, opts = {}) {
+    if (!isBoard(file)) throw new Error(`no artboard ${file}`);
+    const dc = {};
+    for (const f of importsOf(file)) dc[f] = files[f];
+    const boot = `<script>window.__DC=${scriptJson({ entry: file, files: dc, assets, tweaks: opts.tweaks || {} })};<\/script><script>${RUNTIME}<\/script>`;
+    let src = substitute(files[file]);
+    if (SUPPORT.test(src)) src = src.replace(SUPPORT, () => boot);
+    else if (/<head\b[^>]*>/i.test(src)) src = src.replace(/<head\b[^>]*>/i, (m) => m + boot);
+    else src = boot + src;
+    src = src.replace(/<x-dc\b[^>]*>/gi, '<template data-x-dc>').replace(/<\/x-dc\s*>/gi, '</template>');
+    if (opts.standalone) src = /<head\b[^>]*>/i.test(src) ? src.replace(/<head\b[^>]*>/i, (m) => m + CSP) : CSP + src;
+    return src;
+  }
+
+  const metaCache = {};
+  function metaOf(file) {
+    if (own(metaCache, file)) return metaCache[file];
+    let meta = {};
+    const s = new DOMParser().parseFromString(files[file], 'text/html').querySelector('script[data-dc-script]');
+    const raw = s && s.getAttribute('data-props');
+    if (raw) { try { meta = JSON.parse(raw) || {}; } catch { meta = {}; } }
+    return (metaCache[file] = meta);
+  }
+
+  let canvas = {};
+  try { if (typeof files['canvas.json'] === 'string') canvas = JSON.parse(files['canvas.json']); }
+  catch (e) { console.error(`[design] canvas.json is not valid JSON: ${e.message}`); }
+  const pageList = Array.isArray(canvas.pages) ? canvas.pages.filter((p) => p && typeof p.id === 'string') : [];
+  const pages = pageList.length ? pageList : [{ id: '', name: '' }];
+  const pageOf = (p) => (pages.some((q) => q.id === p) ? p : pages[0].id);
+  const num = (v, d) => (Number.isFinite(+v) ? +v : d);
+  function norm(a) {
+    return {
+      file: a.file, x: num(a.x, 0), y: num(a.y, 0), w: +a.w > 0 ? +a.w : 880, h: +a.h > 0 ? +a.h : 560,
+      title: typeof a.title === 'string' && a.title.trim() ? a.title.trim() : stem(a.file),
+      expand: a.expand === 'fill' ? 'fill' : 'fit', print: a.print === 'flow' ? 'flow' : 'fixed', page: pageOf(a.page),
+      interactive: a.is_interactive === true,
+    };
+  }
+  const boards = [];
+  for (const a of Array.isArray(canvas.artboards) ? canvas.artboards : []) {
+    if (a && isBoard(a.file) && !boards.some((b) => b.file === a.file)) boards.push(norm(a));
+  }
+  let nextX = boards.filter((b) => b.page === pages[0].id).reduce((m, b) => Math.max(m, b.x + b.w + 80), 0);
+  for (const f of Object.keys(files).filter(isBoard).sort()) {
+    if (boards.some((b) => b.file === f)) continue;
+    const pv = metaOf(f).$preview || {};
+    const w = +pv.width > 0 ? +pv.width : 880, h = +pv.height > 0 ? +pv.height : 560;
+    boards.push(norm({ file: f, x: nextX, y: 0, w, h }));
+    nextX += w + 80;
+  }
+  const notes = (Array.isArray(canvas.annotations) ? canvas.annotations : [])
+    .filter((n) => n && typeof n.text === 'string')
+    .map((n) => ({ ...n, x: num(n.x, 0), y: num(n.y, 0), w: Math.min(2000, Math.max(120, num(n.w, 240))), page: pageOf(n.page) }));
+  const entry = boards.find((b) => b.file === 'Main.dc.html') || [...boards].sort((a, b) => a.file.localeCompare(b.file))[0];
+  const launch = canvas.launch && typeof canvas.launch === 'object' ? canvas.launch : { view: 'canvas' };
+  const tweaks = {};
+
+  // ---------------------------------------------------------------- chrome
+  $('ld-title').textContent = TITLE;
+  if (pageList.length > 1) {
+    for (const p of pageList) { const o = document.createElement('option'); o.value = p.id; o.textContent = p.name || p.id; $('ld-pages').append(o); }
+    $('ld-pages').hidden = false;
+    $('ld-pages').addEventListener('change', (e) => showCanvas(e.target.value));
+  }
+  const svg = (d) => `<svg viewBox="0 0 16 16"><path d="${d}"/></svg>`;
+
+  // ---------------------------------------------------------------- frames, readiness, messages
+  const frames = new Map(); // iframe -> board
+  let awaiting = new Set();
+  window.__ldReady = false;
+  function settled(f) {
+    if (!awaiting.delete(f)) return;
+    if (!awaiting.size) requestAnimationFrame(() => requestAnimationFrame(() => { window.__ldReady = true; }));
+  }
+  function makeFrame(b, w, h) {
+    const f = document.createElement('iframe');
+    f.setAttribute('sandbox', 'allow-scripts allow-forms');
+    f.title = b.title;
+    f.width = String(w); f.height = String(h);
+    f.style.width = `${w}px`; f.style.height = `${h}px`;
+    f.srcdoc = resolve(b.file, { tweaks: tweaks[b.file] || {} });
+    frames.set(f, b);
+    f.addEventListener('load', () => setTimeout(() => settled(f), 4000), { once: true });
+    return f;
+  }
+  function track(list) {
+    awaiting = new Set(list);
+    window.__ldReady = false;
+    if (!awaiting.size) window.__ldReady = true;
+  }
+  addEventListener('message', (e) => {
+    const data = e.data;
+    if (!data || typeof data.dc !== 'string') return;
+    for (const [f, b] of frames) {
+      if (f.contentWindow !== e.source) continue;
+      if (data.dc === 'ready') settled(f);
+      if (data.dc === 'error') {
+        const el = world.querySelector(`.ld-board[data-file="${CSS.escape(b.file)}"] .ld-err`);
+        if (el) { el.hidden = false; el.title = [el.title, String(data.message)].filter(Boolean).join('\n'); }
+      }
+    }
+  });
+  function sendTweaks(file) {
+    for (const [f, b] of frames) if (b.file === file && f.contentWindow) f.contentWindow.postMessage({ dc: 'props', values: tweaks[file] || {} }, '*');
+  }
+
+  // ---------------------------------------------------------------- tweak chips
+  function chipsFor(b) {
+    const meta = metaOf(b.file);
+    const keys = Object.keys(meta).filter((k) => k !== '$preview' && meta[k] && typeof meta[k] === 'object' && meta[k].editor);
+    if (!keys.length) return null;
+    const box = document.createElement('div');
+    box.className = 'ld-chips';
+    const current = (k) => (tweaks[b.file] && own(tweaks[b.file], k) ? tweaks[b.file][k] : meta[k].default);
+    const set = (k, v) => { (tweaks[b.file] ||= {})[k] = v; sendTweaks(b.file); };
+    for (const k of keys) {
+      const m = meta[k];
+      const chip = document.createElement('label');
+      chip.className = 'ld-chip';
+      const lab = document.createElement('span');
+      lab.textContent = m.label || k;
+      chip.append(lab);
+      const v = current(k);
+      let input;
+      switch (m.editor) {
+        case 'color':
+          if (Array.isArray(m.options)) {
+            for (const c of m.options) {
+              const sw = document.createElement('button');
+              sw.type = 'button'; sw.className = 'ld-swatch'; sw.style.background = c; sw.title = c;
+              sw.addEventListener('click', () => { set(k, c); if (input) input.value = c; });
+              chip.append(sw);
+            }
+          }
+          input = document.createElement('input'); input.type = 'color';
+          input.value = /^#[0-9a-f]{6}$/i.test(v) ? v : '#000000';
+          input.addEventListener('input', () => set(k, input.value));
+          break;
+        case 'boolean':
+          input = document.createElement('input'); input.type = 'checkbox'; input.checked = !!v;
+          input.addEventListener('change', () => set(k, input.checked));
+          break;
+        case 'enum':
+          input = document.createElement('select');
+          for (const o of Array.isArray(m.options) ? m.options : []) {
+            const val = typeof o === 'object' && o ? o.value : o;
+            const opt = document.createElement('option');
+            opt.value = JSON.stringify(val); opt.textContent = typeof o === 'object' && o ? (o.label ?? String(val)) : String(o);
+            if (val === v) opt.selected = true;
+            input.append(opt);
+          }
+          input.addEventListener('change', () => set(k, JSON.parse(input.value)));
+          break;
+        case 'int': case 'float': case 'range':
+          input = document.createElement('input');
+          input.type = m.editor === 'range' ? 'range' : 'number';
+          if (m.min !== undefined) input.min = m.min;
+          if (m.max !== undefined) input.max = m.max;
+          input.step = m.step ?? (m.editor === 'int' ? 1 : 'any');
+          input.value = v ?? '';
+          input.addEventListener('input', () => { const n = m.editor === 'int' ? parseInt(input.value, 10) : parseFloat(input.value); if (Number.isFinite(n)) set(k, n); });
+          break;
+        default:
+          if (String(v ?? '').includes('\n')) { input = document.createElement('textarea'); input.rows = 2; }
+          else { input = document.createElement('input'); input.type = 'text'; }
+          input.value = v ?? '';
+          input.addEventListener('input', () => set(k, input.value));
+      }
+      chip.append(input);
+      if (m.unit) { const u = document.createElement('span'); u.textContent = m.unit; chip.append(u); }
+      box.append(chip);
+    }
+    return box;
+  }
+
+  // ---------------------------------------------------------------- canvas
+  let page = null;
+  let view = { x: 0, y: 0, z: 1 };
+  let selected = null;
+  let expanded = null;
+  const key = (k) => `ld:${TITLE}:${k}`;
+  const store = {
+    get(k) { try { return JSON.parse(sessionStorage.getItem(key(k))); } catch { return null; } },
+    set(k, v) { try { sessionStorage.setItem(key(k), JSON.stringify(v)); } catch { /* storage off */ } },
+  };
+
+  function apply() {
+    world.style.transform = `translate(${view.x}px, ${view.y}px) scale(${view.z})`;
+    world.style.setProperty('--z', String(view.z));
+    world.style.setProperty('--inv', String(1 / view.z));
+    $('ld-zoom').textContent = `${Math.round(view.z * 100)}%`;
+  }
+  function saveView() { if (page !== null) store.set(`view:${page}`, view); store.set('where', expanded ? { focus: expanded } : { page }); }
+  function zoomAt(cx, cy, z) {
+    z = Math.min(8, Math.max(0.03, z));
+    const wx = (cx - view.x) / view.z, wy = (cy - view.y) / view.z;
+    view = { z, x: cx - wx * z, y: cy - wy * z };
+    apply();
+  }
+  function fit() {
+    const items = [...world.children];
+    const vw = stage.clientWidth, vh = stage.clientHeight;
+    if (!items.length) { view = { x: 40, y: 40, z: 1 }; apply(); return; }
+    let z = 1;
+    for (let pass = 0; pass < 3; pass++) {
+      let x0 = Infinity, y0 = Infinity, x1 = -Infinity, y1 = -Infinity;
+      for (const el of items) {
+        const head = el.classList.contains('ld-board') ? (el.querySelector('.ld-head').offsetHeight || 28) / z : 0;
+        x0 = Math.min(x0, el.offsetLeft); y0 = Math.min(y0, el.offsetTop - head);
+        x1 = Math.max(x1, el.offsetLeft + el.offsetWidth); y1 = Math.max(y1, el.offsetTop + el.offsetHeight);
+      }
+      z = Math.min(1, (vw - 80) / (x1 - x0), (vh - 80) / (y1 - y0));
+      view = { z, x: (vw - (x1 - x0) * z) / 2 - x0 * z, y: (vh - (y1 - y0) * z) / 2 - y0 * z };
+      apply();
+    }
+  }
+  function boardEl(b) {
+    const el = document.createElement('div');
+    el.className = 'ld-board';
+    el.dataset.file = b.file;
+    el.style.left = `${b.x}px`; el.style.top = `${b.y}px`; el.style.width = `${b.w}px`;
+    el.style.setProperty('--bw', String(b.w));
+    const head = document.createElement('div');
+    head.className = 'ld-head';
+    const chips = chipsFor(b);
+    if (chips) head.append(chips);
+    const strip = document.createElement('div');
+    strip.className = 'ld-strip';
+    strip.title = 'Click to select, drag to move, double-click to expand';
+    const name = document.createElement('span'); name.className = 'ld-name'; name.textContent = b.title;
+    const size = document.createElement('span'); size.className = 'ld-size';
+    size.textContent = `${b.w} × ${b.h}${b.print === 'flow' ? ' · flow' : ''}${b.interactive ? ' · interactive' : ''}`;
+    const err = document.createElement('span'); err.className = 'ld-err'; err.textContent = 'error'; err.hidden = true;
+    const grow = document.createElement('span'); grow.className = 'ld-grow';
+    const ex = document.createElement('button');
+    ex.className = 'ld-btn'; ex.type = 'button'; ex.title = 'Expand'; ex.innerHTML = svg('M9.5 2.5h4v4M6.5 13.5h-4v-4M13.5 2.5 9 7M2.5 13.5 7 9');
+    ex.addEventListener('click', () => expand(b.file));
+    strip.append(name, size, err, grow, ex);
+    head.append(strip);
+    const frame = document.createElement('div');
+    frame.className = 'ld-frame';
+    frame.style.width = `${b.w}px`; frame.style.height = `${b.h}px`;
+    const shield = document.createElement('div');
+    shield.className = 'ld-shield';
+    frame.append(makeFrame(b, b.w, b.h), shield);
+    el.append(head, frame);
+    return el;
+  }
+  function noteEl(n) {
+    const d = document.createElement('div');
+    d.className = 'ld-note';
+    d.style.left = `${n.x}px`; d.style.top = `${n.y}px`; d.style.width = `${n.w}px`;
+    if (n.bold) d.style.fontWeight = '600';
+    if (n.italic) d.style.fontStyle = 'italic';
+    if (typeof n.color === 'string' && CSS.supports('color', n.color)) d.style.background = n.color;
+    if (n.size === 'large' || n.size === 'l') d.style.fontSize = '18px';
+    if (n.size === 'small' || n.size === 's') d.style.fontSize = '12px';
+    d.textContent = n.text;
+    return d;
+  }
+  function select(file) {
+    selected = file;
+    for (const el of world.querySelectorAll('.ld-board')) el.classList.toggle('is-selected', el.dataset.file === file);
+  }
+  function showCanvas(pageId, forceFit) {
+    if (expanded) closeExpanded();
+    const target = pageOf(pageId);
+    for (const f of [...frames.keys()]) if (!f.isConnected || world.contains(f)) frames.delete(f);
+    page = target;
+    $('ld-pages').value = page;
+    world.replaceChildren();
+    const list = boards.filter((b) => b.page === page);
+    for (const b of list) world.append(boardEl(b));
+    for (const n of notes.filter((q) => q.page === page)) world.append(noteEl(n));
+    track(world.querySelectorAll('iframe'));
+    select(null);
+    const saved = !forceFit && store.get(`view:${page}`);
+    if (saved && Number.isFinite(saved.z)) { view = saved; apply(); } else fit();
+    history.replaceState(null, '', pageList.length > 1 ? `#page=${encodeURIComponent(page)}` : location.pathname + location.search);
+    saveView();
+  }
+
+  // ---------------------------------------------------------------- expanded view
+  function expand(file) {
+    const b = boards.find((q) => q.file === file);
+    if (!b) return;
+    expanded = file;
+    for (const f of [...frames.keys()]) if (exBox.contains(f)) frames.delete(f);
+    exBox.hidden = false;
+    document.body.classList.add('ld-is-expanded');
+    $('ld-back').hidden = false; $('ld-exnav').hidden = false; $('ld-zoomctl').hidden = true; $('ld-pages').hidden = true;
+    const vw = exBox.clientWidth, vh = exBox.clientHeight;
+    let w = b.w, h = b.h, s = 1;
+    if (b.expand === 'fill') { w = vw; h = vh; }
+    else s = Math.min(1, (vw - 48) / b.w, (vh - 48) / b.h);
+    const wrap = document.createElement('div');
+    wrap.className = `ld-exframe${b.expand === 'fill' ? ' is-fill' : ''}`;
+    wrap.style.width = `${w * s}px`; wrap.style.height = `${h * s}px`;
+    const f = makeFrame(b, w, h);
+    f.style.transform = `scale(${s})`;
+    wrap.append(f);
+    exBox.replaceChildren(wrap);
+    track([f]);
+    $('ld-exname').textContent = b.title;
+    $('ld-exmeta').textContent = `${b.w} × ${b.h}${s < 1 ? ` · ${Math.round(s * 100)}%` : ''}`;
+    history.replaceState(null, '', `#focus=${encodeURIComponent(file)}`);
+    saveView();
+  }
+  function closeExpanded() {
+    for (const f of [...frames.keys()]) if (exBox.contains(f)) frames.delete(f);
+    exBox.replaceChildren();
+    exBox.hidden = true;
+    document.body.classList.remove('ld-is-expanded');
+    expanded = null;
+    $('ld-back').hidden = true; $('ld-exnav').hidden = true; $('ld-zoomctl').hidden = false; $('ld-pages').hidden = pageList.length < 2;
+  }
+  function back() {
+    const file = expanded;
+    closeExpanded();
+    const b = boards.find((q) => q.file === file);
+    if (!world.children.length || (b && b.page !== page)) showCanvas(b ? b.page : page);
+    else { history.replaceState(null, '', pageList.length > 1 ? `#page=${encodeURIComponent(page)}` : location.pathname + location.search); saveView(); }
+  }
+  function stepExpanded(d) {
+    const i = boards.findIndex((q) => q.file === expanded);
+    expand(boards[(i + d + boards.length) % boards.length].file);
+  }
+  $('ld-back').addEventListener('click', back);
+  $('ld-prev').addEventListener('click', () => stepExpanded(-1));
+  $('ld-next').addEventListener('click', () => stepExpanded(1));
+  $('ld-zoomin').addEventListener('click', () => { zoomAt(stage.clientWidth / 2, stage.clientHeight / 2, view.z * 1.25); saveView(); });
+  $('ld-zoomout').addEventListener('click', () => { zoomAt(stage.clientWidth / 2, stage.clientHeight / 2, view.z / 1.25); saveView(); });
+  $('ld-fit').addEventListener('click', () => { fit(); saveView(); });
+
+  // ---------------------------------------------------------------- gestures
+  const pointers = new Map();
+  let gesture = null;
+  let lastTap = { file: null, t: 0 };
+  stage.addEventListener('pointerdown', (e) => {
+    if (e.button !== 0 && e.button !== 1) return;
+    if (e.target.closest('.ld-chips') || e.target.closest('button')) return;
+    if (e.isPrimary) { pointers.clear(); gesture = null; } // a lost pointerup must not turn the next press into a pinch
+    pointers.set(e.pointerId, { x: e.clientX, y: e.clientY });
+    stage.setPointerCapture(e.pointerId);
+    if (pointers.size === 2) {
+      const [a, b] = [...pointers.values()];
+      gesture = { kind: 'pinch', d: Math.hypot(a.x - b.x, a.y - b.y), z: view.z };
+      return;
+    }
+    const boardNode = e.target.closest('.ld-board');
+    const onStrip = !!e.target.closest('.ld-strip');
+    const panAll = document.body.classList.contains('ld-space') || e.button === 1;
+    if (onStrip && !panAll) {
+      const b = boards.find((q) => q.file === boardNode.dataset.file);
+      gesture = { kind: 'move', b, el: boardNode, sx: e.clientX, sy: e.clientY, ox: b.x, oy: b.y, moved: false };
+    } else {
+      gesture = { kind: 'pan', sx: e.clientX, sy: e.clientY, vx: view.x, vy: view.y, moved: false,
+        file: !panAll && boardNode && e.target.closest('.ld-shield') ? boardNode.dataset.file : null };
+    }
+  });
+  stage.addEventListener('pointermove', (e) => {
+    const p = pointers.get(e.pointerId);
+    if (!p || !gesture) return;
+    p.x = e.clientX; p.y = e.clientY;
+    if (gesture.kind === 'pinch' && pointers.size === 2) {
+      const [a, b] = [...pointers.values()];
+      const r = stage.getBoundingClientRect();
+      zoomAt((a.x + b.x) / 2 - r.left, (a.y + b.y) / 2 - r.top, gesture.z * Math.hypot(a.x - b.x, a.y - b.y) / gesture.d);
+      return;
+    }
+    const dx = e.clientX - gesture.sx, dy = e.clientY - gesture.sy;
+    if (!gesture.moved && Math.hypot(dx, dy) < 4) return;
+    gesture.moved = true;
+    document.body.classList.add('ld-panning');
+    if (gesture.kind === 'move') {
+      gesture.b.x = Math.round(gesture.ox + dx / view.z); gesture.b.y = Math.round(gesture.oy + dy / view.z);
+      gesture.el.style.left = `${gesture.b.x}px`; gesture.el.style.top = `${gesture.b.y}px`;
+    } else if (gesture.kind === 'pan') {
+      view.x = gesture.vx + dx; view.y = gesture.vy + dy; apply();
+    }
+  });
+  function endPointer(e) {
+    if (!pointers.delete(e.pointerId)) return;
+    if (pointers.size) return;
+    document.body.classList.remove('ld-panning');
+    const g = gesture;
+    gesture = null;
+    if (!g) return;
+    if (g.kind === 'move' && !g.moved) {
+      const now = Date.now();
+      if (lastTap.file === g.b.file && now - lastTap.t < 350) { lastTap = { file: null, t: 0 }; expand(g.b.file); return; }
+      lastTap = { file: g.b.file, t: now };
+      select(g.b.file);
+    } else if (g.kind === 'pan' && !g.moved) {
+      select(g.file);
+    }
+    saveView();
+  }
+  stage.addEventListener('dblclick', (e) => {
+    // pointer capture retargets dblclick to the stage: find the name strip under the pointer
+    const strip = document.elementsFromPoint(e.clientX, e.clientY).find((el) => el.classList && el.classList.contains('ld-strip'));
+    const boardNode = strip && strip.closest('.ld-board');
+    if (boardNode) expand(boardNode.dataset.file);
+  });
+  stage.addEventListener('pointerup', endPointer);
+  stage.addEventListener('pointercancel', endPointer);
+  stage.addEventListener('wheel', (e) => {
+    e.preventDefault();
+    const r = stage.getBoundingClientRect();
+    if (e.ctrlKey || e.metaKey) zoomAt(e.clientX - r.left, e.clientY - r.top, view.z * Math.exp(-Math.max(-50, Math.min(50, e.deltaY)) * 0.01));
+    else { view.x -= e.deltaX; view.y -= e.deltaY; apply(); }
+    clearTimeout(stage._t); stage._t = setTimeout(saveView, 200);
+  }, { passive: false });
+  addEventListener('keydown', (e) => {
+    if (e.target.closest && e.target.closest('input, select, textarea')) return;
+    if (expanded) {
+      if (e.key === 'Escape') back();
+      else if (e.key === 'ArrowLeft') stepExpanded(-1);
+      else if (e.key === 'ArrowRight') stepExpanded(1);
+      return;
+    }
+    if (e.key === ' ') { document.body.classList.add('ld-space'); e.preventDefault(); return; }
+    const cx = stage.clientWidth / 2, cy = stage.clientHeight / 2;
+    if (e.key === 'Escape') select(null);
+    else if (e.key === '0') fit();
+    else if (e.key === '1') zoomAt(cx, cy, 1);
+    else if (e.key === '+' || e.key === '=') zoomAt(cx, cy, view.z * 1.25);
+    else if (e.key === '-' || e.key === '_') zoomAt(cx, cy, view.z / 1.25);
+    else return;
+    saveView();
+  });
+  addEventListener('keyup', (e) => { if (e.key === ' ') document.body.classList.remove('ld-space'); });
+  addEventListener('blur', () => document.body.classList.remove('ld-space'));
+  addEventListener('resize', () => { if (expanded) expand(expanded); });
+
+  // ---------------------------------------------------------------- start
+  window.__ld = {
+    title: TITLE,
+    entry: entry ? entry.file : null,
+    pages: pageList.map((p) => ({ id: p.id, name: p.name })),
+    boards: boards.map((b) => ({ ...b })),
+    resolve,
+  };
+  const hash = new URLSearchParams(location.hash.slice(1));
+  const where = store.get('where');
+  if (!boards.length) {
+    world.textContent = 'This canvas has no .dc.html artboards.';
+    window.__ldReady = true;
+  } else if (hash.get('focus') && boards.some((b) => b.file === hash.get('focus'))) {
+    showCanvas(boards.find((b) => b.file === hash.get('focus')).page);
+    expand(hash.get('focus'));
+  } else if (hash.has('page') || hash.has('fit')) {
+    showCanvas(hash.get('page') ?? launch.page ?? (entry && entry.page), hash.has('fit'));
+  } else if (where && where.focus && boards.some((b) => b.file === where.focus)) {
+    showCanvas(boards.find((b) => b.file === where.focus).page);
+    expand(where.focus);
+  } else if (where && typeof where.page === 'string') {
+    showCanvas(where.page);
+  } else if (launch.view === 'focused' && boards.some((b) => b.file === launch.file)) {
+    showCanvas(boards.find((b) => b.file === launch.file).page);
+    expand(launch.file);
+  } else {
+    showCanvas(launch.page ?? (entry && entry.page));
+  }
+})();
+</script>
+</body>
+</html>
