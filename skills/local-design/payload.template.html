@@ -12,7 +12,7 @@
     --ld-bg: #e7e6e3; --ld-dot: #d0cec9; --ld-chrome: #fbfbfa; --ld-ink: #1e1e1c; --ld-muted: #6b6964;
     --ld-line: #dad8d3; --ld-accent: #3158d4; --ld-danger: #c2362b; --ld-note: #fdf0a6; --ld-note-ink: #3b3417;
     --ld-shadow: 0 1px 2px rgba(0,0,0,.07), 0 10px 30px rgba(0,0,0,.09);
-    color-scheme: light;
+    --ld-bar-height: 56px; color-scheme: light;
   }
   @media (prefers-color-scheme: dark) {
     :root {
@@ -26,23 +26,25 @@
   html, body { margin: 0; height: 100%; overflow: hidden; background: var(--ld-bg); color: var(--ld-ink);
     font: 13px/1.4 -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, sans-serif; -webkit-font-smoothing: antialiased; }
   button, select, input { font: inherit; color: inherit; }
-  #ld-bar { position: fixed; inset: 0 0 auto 0; height: 46px; display: flex; align-items: center; gap: 10px;
-    padding: 0 12px; background: var(--ld-chrome); border-bottom: 1px solid var(--ld-line); z-index: 20; }
+  #ld-bar { position: fixed; inset: 0 0 auto 0; min-height: 56px; display: flex; flex-wrap: wrap; align-items: center; gap: 8px;
+    padding: 8px 12px; background: var(--ld-chrome); border-bottom: 1px solid var(--ld-line); z-index: 20; }
   #ld-title { margin: 0; font-size: 13px; font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 32vw; }
   #ld-bar .ld-grow { flex: 1; }
-  .ld-btn { display: inline-flex; align-items: center; justify-content: center; gap: 6px; height: 28px; min-width: 28px;
+  .ld-btn { display: inline-flex; align-items: center; justify-content: center; gap: 6px; height: 32px; min-width: 32px;
     padding: 0 8px; border: 1px solid var(--ld-line); border-radius: 7px; background: transparent; cursor: pointer; }
   .ld-btn:hover { background: color-mix(in oklab, var(--ld-ink) 7%, transparent); }
-  .ld-btn:focus-visible, select:focus-visible { outline: 2px solid var(--ld-accent); outline-offset: 1px; }
+  .ld-btn:focus-visible, select:focus-visible, input:focus-visible, textarea:focus-visible, summary:focus-visible { outline: 2px solid var(--ld-accent); outline-offset: 2px; }
   .ld-btn svg { width: 16px; height: 16px; stroke: currentColor; fill: none; stroke-width: 1.6; stroke-linecap: round; stroke-linejoin: round; }
-  #ld-pages { height: 28px; border: 1px solid var(--ld-line); border-radius: 7px; background: var(--ld-chrome); padding: 0 6px; }
+  #ld-pages { height: 32px; max-width: 180px; border: 1px solid var(--ld-line); border-radius: 7px; background: var(--ld-chrome); padding: 0 6px; }
+  #ld-zoomctl, #ld-exnav { display: flex; align-items: center; gap: 4px; flex-shrink: 0; }
+  #ld-exnav { min-width: 0; flex-shrink: 1; }
   #ld-zoom { min-width: 48px; text-align: center; color: var(--ld-muted); font-variant-numeric: tabular-nums; }
   .ld-badge { color: var(--ld-muted); font-size: 12px; white-space: nowrap; }
-  #ld-exname { font-weight: 600; white-space: nowrap; }
+  #ld-exname { font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
   #ld-exmeta { color: var(--ld-muted); font-variant-numeric: tabular-nums; white-space: nowrap; }
   [hidden] { display: none !important; }
 
-  #ld-stage { position: fixed; inset: 46px 0 0 0; overflow: hidden; touch-action: none; cursor: default;
+  #ld-stage { position: fixed; inset: var(--ld-bar-height) 0 0 0; overflow: hidden; touch-action: none; cursor: default;
     background-color: var(--ld-bg); background-image: radial-gradient(var(--ld-dot) 1px, transparent 1.2px); background-size: 22px 22px; }
   body.ld-panning #ld-stage, body.ld-space #ld-stage { cursor: grabbing; }
   #ld-world { position: absolute; left: 0; top: 0; transform-origin: 0 0; --z: 1; --inv: 1; }
@@ -80,10 +82,41 @@
     box-shadow: var(--ld-shadow); white-space: pre-wrap; overflow-wrap: anywhere; font-size: 14px; line-height: 1.45; }
 
   body.ld-is-expanded #ld-stage { visibility: hidden; }
-  #ld-expanded { position: fixed; inset: 46px 0 0 0; overflow: auto; background: var(--ld-bg); z-index: 10; }
+  #ld-expanded { position: fixed; inset: var(--ld-bar-height) 0 0 0; overflow: auto; background: var(--ld-bg); z-index: 10; }
   .ld-exframe { position: relative; margin: 24px auto; box-shadow: var(--ld-shadow); background: #fff; overflow: hidden; }
   .ld-exframe.is-fill { margin: 0; box-shadow: none; }
   .ld-exframe iframe { display: block; border: 0; transform-origin: 0 0; background: transparent; }
+  #ld-help summary { list-style: none; }
+  #ld-help summary::-webkit-details-marker { display: none; }
+  #ld-help-panel { position: fixed; top: calc(var(--ld-bar-height) + 8px); right: 12px; width: min(360px, calc(100vw - 24px));
+    max-height: calc(100dvh - var(--ld-bar-height) - 24px); overflow: auto; padding: 16px; background: var(--ld-chrome);
+    border: 1px solid var(--ld-line); border-radius: 8px; box-shadow: var(--ld-shadow); }
+  #ld-help-panel h2 { font-size: 14px; margin: 0 0 8px; }
+  #ld-help-panel p { margin: 0 0 12px; }
+  #ld-help-panel ul { padding-left: 20px; margin: 8px 0 16px; }
+  #ld-help-panel .ld-actions { display: flex; flex-wrap: wrap; gap: 8px; }
+  #ld-settings { width: 100%; min-height: 100px; margin-top: 12px; background: var(--ld-bg); color: var(--ld-ink); border: 1px solid var(--ld-line); }
+  #ld-copy-status { margin-top: 8px; }
+  #ld-status.has-errors, #ld-errors { color: var(--ld-danger); }
+  @media (max-width: 640px) {
+    #ld-bar { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 6px 8px; }
+    #ld-title { max-width: none; min-width: 0; grid-column: 1; grid-row: 1; }
+    #ld-bar > .ld-grow { display: none; }
+    #ld-help { grid-column: 2; grid-row: 1; justify-self: end; }
+    #ld-zoomctl { grid-column: 1; grid-row: 2; }
+    #ld-pages { grid-column: 2; grid-row: 2; width: 100%; max-width: 120px; }
+    #ld-status { grid-column: 1 / -1; grid-row: 3; white-space: normal; }
+    #ld-back { grid-column: 1; grid-row: 1; justify-self: start; }
+    body.ld-is-expanded #ld-title { display: none; }
+    #ld-exnav { grid-column: 1 / -1; grid-row: 2; justify-content: space-between; }
+    #ld-exmeta { display: none; }
+    .ld-btn, #ld-pages, .ld-strip .ld-btn { min-width: 44px; height: 44px; }
+    .ld-strip { height: 44px; }
+    .ld-strip .ld-size { display: none; }
+    .ld-chip { min-height: 44px; height: auto; }
+    .ld-chip input, .ld-chip select { min-height: 28px; }
+    .ld-swatch { width: 44px; height: 44px; }
+  }
 </style>
 </head>
 <body>
@@ -92,18 +125,32 @@
   <h1 id="ld-title"></h1>
   <select id="ld-pages" hidden aria-label="Page"></select>
   <span id="ld-exnav" hidden>
-    <button class="ld-btn" id="ld-prev" title="Previous artboard (Left arrow)"><svg viewBox="0 0 16 16"><path d="M10 3 5 8l5 5"/></svg></button>
+    <button class="ld-btn" id="ld-prev" aria-label="Previous artboard" title="Previous artboard (Left arrow)"><svg viewBox="0 0 16 16"><path d="M10 3 5 8l5 5"/></svg></button>
     <span id="ld-exname"></span> <span id="ld-exmeta"></span>
-    <button class="ld-btn" id="ld-next" title="Next artboard (Right arrow)"><svg viewBox="0 0 16 16"><path d="m6 3 5 5-5 5"/></svg></button>
+    <button class="ld-btn" id="ld-next" aria-label="Next artboard" title="Next artboard (Right arrow)"><svg viewBox="0 0 16 16"><path d="m6 3 5 5-5 5"/></svg></button>
   </span>
   <span class="ld-grow"></span>
-  <span class="ld-badge" title="This canvas runs on this machine; ask Claude for changes and exports.">Local preview &middot; view only</span>
+  <span class="ld-badge" id="ld-status" role="status" aria-live="polite">Loading preview…</span>
   <span id="ld-zoomctl">
-    <button class="ld-btn" id="ld-zoomout" title="Zoom out (-)"><svg viewBox="0 0 16 16"><path d="M3.5 8h9"/></svg></button>
+    <button class="ld-btn" id="ld-zoomout" aria-label="Zoom out" title="Zoom out (-)"><svg viewBox="0 0 16 16"><path d="M3.5 8h9"/></svg></button>
     <span id="ld-zoom">100%</span>
-    <button class="ld-btn" id="ld-zoomin" title="Zoom in (+)"><svg viewBox="0 0 16 16"><path d="M3.5 8h9M8 3.5v9"/></svg></button>
+    <button class="ld-btn" id="ld-zoomin" aria-label="Zoom in" title="Zoom in (+)"><svg viewBox="0 0 16 16"><path d="M3.5 8h9M8 3.5v9"/></svg></button>
     <button class="ld-btn" id="ld-fit" title="Zoom to fit (0)">Fit</button>
   </span>
+  <details id="ld-help">
+    <summary class="ld-btn">Help</summary>
+    <div id="ld-help-panel">
+      <h2>Preview changes are temporary</h2>
+      <p>Tweaks and moved artboards reset on reload. Copy settings and send them to your agent to keep them. Prototype interactions are temporary too.</p>
+      <div class="ld-actions"><button class="ld-btn" id="ld-reset">Reset preview</button><button class="ld-btn" id="ld-copy">Copy settings</button></div>
+      <textarea id="ld-settings" aria-label="Preview settings to copy" readonly hidden></textarea>
+      <p id="ld-copy-status" role="status"></p>
+      <h2>Explore the canvas</h2>
+      <ul><li>Drag the background to pan; pinch or Ctrl/Cmd-wheel to zoom.</li><li>Click an artboard to use its controls. Expand opens it on its own.</li><li>Drag a title to move an artboard. 0 fits; 1 shows actual size.</li><li>Escape returns to the canvas. Arrow keys switch expanded artboards when a control is not focused.</li></ul>
+      <p>Ask your agent for content changes or PNG/PDF exports.</p>
+      <ul id="ld-errors" hidden aria-label="Preview problems"></ul>
+    </div>
+  </details>
 </header>
 <main id="ld-stage"><div id="ld-world"></div></main>
 <section id="ld-expanded" hidden></section>
@@ -125,6 +172,13 @@
   var tweaks = DC.tweaks || {};
   var root = null;
   var rootMeta = {};
+  // srcdoc can begin executing before DevTools attaches to its process.
+  if (!window.__ldViolations) {
+    window.__ldViolations = [];
+    document.addEventListener('securitypolicyviolation', function (e) {
+      window.__ldViolations.push({ uri: e.blockedURI, directive: e.effectiveDirective });
+    });
+  }
 
   function post(msg) { if (embedded) { try { window.parent.postMessage(msg, '*'); } catch (e) { /* detached */ } } }
   function report(err, quiet) {
@@ -291,13 +345,21 @@
     var b = el.__dcBound || (el.__dcBound = {});
     for (var ev in on) if (!b[ev]) { b[ev] = true; el.addEventListener(ev, dispatcher(el, ev)); }
   }
+  function syncControl(el, source) {
+    if (source.__dcValue && 'value' in el) {
+      var value = source.getAttribute('value') || '';
+      if (el.value !== value) el.value = value;
+    }
+    if (source.__dcChecked && 'checked' in el) el.checked = source.hasAttribute('checked');
+  }
   function mount(node) {
     if (node.nodeType !== 1) return;
     if (node.localName === 'dc-import' && node.__dcImport) { mountImport(node); return; }
     bind(node);
     if (node.__dcProps) for (var k in node.__dcProps) node[k] = node.__dcProps[k];
-    if (node.__dcRef) setRef(node.__dcRef, node);
     for (var c = node.firstChild; c; c = c.nextSibling) mount(c);
+    syncControl(node, node);
+    if (node.__dcRef) setRef(node.__dcRef, node);
   }
   function unmount(node) {
     if (node.nodeType !== 1) return;
@@ -317,12 +379,11 @@
     var i, la = l.attributes, na = n.attributes;
     for (i = la.length - 1; i >= 0; i--) if (!n.hasAttribute(la[i].name)) l.removeAttribute(la[i].name);
     for (i = 0; i < na.length; i++) if (l.getAttribute(na[i].name) !== na[i].value) l.setAttribute(na[i].name, na[i].value);
-    if (n.__dcValue && 'value' in l) { var nv = n.getAttribute('value') || ''; if (l.value !== nv) l.value = nv; }
-    if (n.__dcChecked && 'checked' in l) l.checked = n.hasAttribute('checked');
     l.__dcOn = n.__dcOn; bind(l);
     if (n.__dcProps) for (var k in n.__dcProps) l[k] = n.__dcProps[k];
     if (l.__dcRef !== n.__dcRef) { setRef(l.__dcRef, null); l.__dcRef = n.__dcRef; setRef(l.__dcRef, l); }
     patchChildren(l, Array.prototype.slice.call(n.childNodes));
+    syncControl(l, n);
   }
   function patchChildren(live, next) {
     for (var i = 0; i < next.length; i++) {
@@ -368,7 +429,7 @@
       var self = this;
       queueMicrotask(function () { self.queued = false; self.render(); });
     }
-    setProps(p) { this.logic.props = p; this.render(); }
+    setProps(p) { this.logic.props = Object.assign(defaults(this.def.meta), p); this.render(); }
     destroy() {
       this.dead = true;
       call(this.logic, 'componentWillUnmount');
@@ -458,6 +519,10 @@
     tweaks = e.data.values || {};
     if (root) root.setProps(rootProps());
   });
+  window.addEventListener('keydown', function (e) {
+    if (e.defaultPrevented || e.target.isContentEditable || (e.target.closest && e.target.closest('input,select,textarea'))) return;
+    if (['Escape', 'ArrowLeft', 'ArrowRight'].indexOf(e.key) !== -1) post({ dc: 'key', key: e.key });
+  });
   if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', boot); else boot();
 })();
 </script>
@@ -510,7 +575,9 @@
     else if (/<head\b[^>]*>/i.test(src)) src = src.replace(/<head\b[^>]*>/i, (m) => m + boot);
     else src = boot + src;
     src = src.replace(/<x-dc\b[^>]*>/gi, '<template data-x-dc>').replace(/<\/x-dc\s*>/gi, '</template>');
-    if (opts.standalone) src = /<head\b[^>]*>/i.test(src) ? src.replace(/<head\b[^>]*>/i, (m) => m + CSP) : CSP + src;
+    if (opts.standalone) {
+      return `<!doctype html><html><head><meta charset="utf-8">${CSP}<style>html,body{margin:0;width:100%;height:100%}iframe{display:block;border:0;width:100%;height:100%}</style></head><body><iframe id="ld-render" sandbox="allow-scripts allow-forms" title="Artboard"></iframe><script>document.getElementById('ld-render').srcdoc=${scriptJson(src)};<\/script></body></html>`;
+    }
     return src;
   }
 
@@ -569,10 +636,28 @@
 
   // ---------------------------------------------------------------- frames, readiness, messages
   const frames = new Map(); // iframe -> board
+  const problems = new Map();
   let awaiting = new Set();
   window.__ldReady = false;
+  function updateStatus() {
+    $('ld-status').classList.toggle('has-errors', problems.size > 0);
+    $('ld-status').textContent = problems.size ? 'Preview has errors — open Help' : awaiting.size ? 'Loading preview…' : 'Preview · resets on reload';
+    $('ld-errors').hidden = !problems.size;
+    $('ld-errors').replaceChildren();
+    for (const [file, messages] of problems) for (const message of messages) {
+      const item = document.createElement('li'); item.textContent = `${stem(file)}: ${message}`; $('ld-errors').append(item);
+    }
+  }
+  function reportProblem(b, message) {
+    if (!problems.has(b.file)) problems.set(b.file, new Set());
+    problems.get(b.file).add(String(message));
+    const el = world.querySelector(`.ld-board[data-file="${CSS.escape(b.file)}"] .ld-err`);
+    if (el) { el.hidden = false; el.title = [...problems.get(b.file)].join('\n'); }
+    updateStatus();
+  }
   function settled(f) {
     if (!awaiting.delete(f)) return;
+    updateStatus();
     if (!awaiting.size) requestAnimationFrame(() => requestAnimationFrame(() => { window.__ldReady = true; }));
   }
   function makeFrame(b, w, h) {
@@ -583,13 +668,16 @@
     f.style.width = `${w}px`; f.style.height = `${h}px`;
     f.srcdoc = resolve(b.file, { tweaks: tweaks[b.file] || {} });
     frames.set(f, b);
-    f.addEventListener('load', () => setTimeout(() => settled(f), 4000), { once: true });
+    f.addEventListener('load', () => setTimeout(() => {
+      if (f.isConnected && awaiting.has(f)) { reportProblem(b, 'Preview did not finish loading. Ask your agent to check it.'); settled(f); }
+    }, 10000), { once: true });
     return f;
   }
   function track(list) {
     awaiting = new Set(list);
     window.__ldReady = false;
     if (!awaiting.size) window.__ldReady = true;
+    updateStatus();
   }
   addEventListener('message', (e) => {
     const data = e.data;
@@ -597,9 +685,11 @@
     for (const [f, b] of frames) {
       if (f.contentWindow !== e.source) continue;
       if (data.dc === 'ready') settled(f);
-      if (data.dc === 'error') {
-        const el = world.querySelector(`.ld-board[data-file="${CSS.escape(b.file)}"] .ld-err`);
-        if (el) { el.hidden = false; el.title = [el.title, String(data.message)].filter(Boolean).join('\n'); }
+      if (data.dc === 'error') reportProblem(b, data.message);
+      if (data.dc === 'key' && expanded && exBox.contains(f)) {
+        if (data.key === 'Escape') back();
+        else if (data.key === 'ArrowLeft') stepExpanded(-1);
+        else if (data.key === 'ArrowRight') stepExpanded(1);
       }
     }
   });
@@ -736,7 +826,7 @@
     const err = document.createElement('span'); err.className = 'ld-err'; err.textContent = 'error'; err.hidden = true;
     const grow = document.createElement('span'); grow.className = 'ld-grow';
     const ex = document.createElement('button');
-    ex.className = 'ld-btn'; ex.type = 'button'; ex.title = 'Expand'; ex.innerHTML = svg('M9.5 2.5h4v4M6.5 13.5h-4v-4M13.5 2.5 9 7M2.5 13.5 7 9');
+    ex.className = 'ld-btn'; ex.type = 'button'; ex.title = 'Expand'; ex.setAttribute('aria-label', `Expand ${b.title}`); ex.innerHTML = svg('M9.5 2.5h4v4M6.5 13.5h-4v-4M13.5 2.5 9 7M2.5 13.5 7 9');
     ex.addEventListener('click', () => expand(b.file));
     strip.append(name, size, err, grow, ex);
     head.append(strip);
@@ -828,6 +918,42 @@
     const i = boards.findIndex((q) => q.file === expanded);
     expand(boards[(i + d + boards.length) % boards.length].file);
   }
+  function resizeExpanded() {
+    const b = boards.find((q) => q.file === expanded), f = exBox.querySelector('iframe');
+    if (!b || !f) return;
+    const fill = b.expand === 'fill', w = fill ? exBox.clientWidth : b.w, h = fill ? exBox.clientHeight : b.h;
+    const scale = fill ? 1 : Math.max(.01, Math.min(1, (exBox.clientWidth - 48) / w, (exBox.clientHeight - 48) / h));
+    f.width = w; f.height = h; f.style.width = `${w}px`; f.style.height = `${h}px`; f.style.transform = `scale(${scale})`;
+    f.parentElement.style.width = `${w * scale}px`; f.parentElement.style.height = `${h * scale}px`;
+    $('ld-exmeta').textContent = `${b.w} × ${b.h}${scale < 1 ? ` · ${Math.round(scale * 100)}%` : ''}`;
+  }
+  const originalPositions = new Map(boards.map((b) => [b.file, { x: b.x, y: b.y }]));
+  $('ld-reset').addEventListener('click', () => {
+    for (const file of Object.keys(tweaks)) delete tweaks[file];
+    for (const b of boards) Object.assign(b, originalPositions.get(b.file));
+    problems.clear();
+    const focus = expanded;
+    showCanvas(page, true);
+    if (focus) expand(focus);
+    $('ld-settings').hidden = true; $('ld-copy-status').textContent = 'Preview reset.';
+  });
+  $('ld-copy').addEventListener('click', async () => {
+    const moved = boards.filter((b) => b.x !== originalPositions.get(b.file).x || b.y !== originalPositions.get(b.file).y)
+      .map(({ file, x, y }) => ({ file, x, y }));
+    const value = JSON.stringify({ title: TITLE, tweaks, ...(moved.length ? { artboardPositions: moved } : {}) }, null, 2);
+    $('ld-settings').value = value;
+    try {
+      await navigator.clipboard.writeText(value);
+      $('ld-settings').hidden = true; $('ld-copy-status').textContent = 'Settings copied. Send them to your agent to keep these changes.';
+    } catch {
+      $('ld-settings').hidden = false; $('ld-settings').focus(); $('ld-settings').select();
+      $('ld-copy-status').textContent = 'Copy the selected settings and send them to your agent.';
+    }
+  });
+  new ResizeObserver(() => {
+    document.documentElement.style.setProperty('--ld-bar-height', `${$('ld-bar').getBoundingClientRect().height}px`);
+    resizeExpanded();
+  }).observe($('ld-bar'));
   $('ld-back').addEventListener('click', back);
   $('ld-prev').addEventListener('click', () => stepExpanded(-1));
   $('ld-next').addEventListener('click', () => stepExpanded(1));
@@ -915,6 +1041,7 @@
     clearTimeout(stage._t); stage._t = setTimeout(saveView, 200);
   }, { passive: false });
   addEventListener('keydown', (e) => {
+    if (e.key === 'Escape' && $('ld-help').open) { $('ld-help').open = false; $('ld-help').querySelector('summary').focus(); return; }
     if (e.target.closest && e.target.closest('input, select, textarea')) return;
     if (expanded) {
       if (e.key === 'Escape') back();
@@ -934,7 +1061,7 @@
   });
   addEventListener('keyup', (e) => { if (e.key === ' ') document.body.classList.remove('ld-space'); });
   addEventListener('blur', () => document.body.classList.remove('ld-space'));
-  addEventListener('resize', () => { if (expanded) expand(expanded); });
+  addEventListener('resize', resizeExpanded);
 
   // ---------------------------------------------------------------- start
   window.__ld = {

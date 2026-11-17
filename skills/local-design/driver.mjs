@@ -5,15 +5,18 @@
 // Chromium-family browser over the DevTools protocol - ego lite first, then Google Chrome /
 // Chromium - with a throwaway profile, so the user's own browser session is never touched.
 // Each artboard is resolved by the canvas page itself (window.__ld.resolve), exactly as the
-// canvas renders it, then loaded on its own at its frame size. The driver uploads nothing;
-// artboards may load the network resources they link, which check lists.
+// canvas renders it, then loaded in an opaque-origin iframe at its frame size.
+// PDF uses an equivalent CSP sandbox on a temporary loopback document for native
+// pagination. The driver uploads nothing; artboards may load linked resources.
 
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { spawn, spawnSync } from 'node:child_process';
+import { createServer } from 'node:http';
+import { randomUUID } from 'node:crypto';
 import { pathToFileURL } from 'node:url';
-import { check as seedCheck, SeedError } from './seed-canvas.mjs';
+import { check as seedCheck, SeedError, readCanvasFile, renderCanvas, fileInDirectory } from './seed-canvas.mjs';
 
 class UserError extends Error {}
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
@@ -189,17 +192,24 @@ async function launchBrowser() {
   ];
   const proc = spawn(bin, args, { stdio: ['ignore', 'ignore', 'pipe'] });
   let log = '';
-  const wsUrl = await new Promise((resolve, reject) => {
-    const timer = setTimeout(() => reject(new UserError(`browser did not start within 20s: ${bin}\n${log.slice(-600)}`)), 20000);
-    proc.stderr.on('data', (d) => {
-      log += d;
-      const m = log.match(/DevTools listening on (ws:\/\/\S+)/);
-      if (m) { clearTimeout(timer); resolve(m[1]); }
+  let cdp;
+  try {
+    const wsUrl = await new Promise((resolve, reject) => {
+      const timer = setTimeout(() => reject(new UserError(`browser did not start within 20s: ${bin}\n${log.slice(-600)}`)), 20000);
+      proc.stderr.on('data', (d) => {
+        log += d;
+        const m = log.match(/DevTools listening on (ws:\/\/\S+)/);
+        if (m) { clearTimeout(timer); resolve(m[1]); }
+      });
+      proc.on('exit', (code) => { clearTimeout(timer); reject(new UserError(`browser exited (${code}) before it was ready: ${bin}\n${log.slice(-600)}`)); });
+      proc.on('error', (e) => { clearTimeout(timer); reject(new UserError(`cannot start ${bin}: ${e.message}`)); });
     });
-    proc.on('exit', (code) => { clearTimeout(timer); reject(new UserError(`browser exited (${code}) before it was ready: ${bin}\n${log.slice(-600)}`)); });
-    proc.on('error', (e) => { clearTimeout(timer); reject(new UserError(`cannot start ${bin}: ${e.message}`)); });
-  });
-  const cdp = await CDP.connect(wsUrl);
+    cdp = await CDP.connect(wsUrl);
+  } catch (e) {
+    if (proc.exitCode === null) proc.kill('SIGKILL');
+    fs.rmSync(profile, { recursive: true, force: true, maxRetries: 3 });
+    throw e;
+  }
   return {
     cdp,
     bin,
@@ -224,8 +234,10 @@ const KEYS = {
 };
 
 // recorded before any page script runs
-const PRELUDE = `window.__ldViolations = [];
-document.addEventListener('securitypolicyviolation', (e) => { window.__ldViolations.push({ uri: e.blockedURI, directive: e.effectiveDirective }); });`;
+const PRELUDE = `if (!window.__ldViolations) {
+  window.__ldViolations = [];
+  document.addEventListener('securitypolicyviolation', (e) => { window.__ldViolations.push({ uri: e.blockedURI, directive: e.effectiveDirective }); });
+}`;
 
 const SETTLE_JS = `(async () => {
   const t0 = Date.now();
@@ -274,7 +286,7 @@ const DIAG_JS = `(() => {
   };
 })()`;
 
-class Tab {
+export class Tab {
   static async open(browser, { width, height, scale = 1, theme = 'light' }) {
     const t = new Tab();
     t.cdp = browser.cdp;
@@ -282,6 +294,9 @@ class Tab {
     t.height = height;
     t.errors = [];
     t.network = new Map(); // requestId -> { url, failed }
+    t.contexts = new Map();
+    t.childSessions = new Set();
+    t.theme = theme;
     const { targetId } = await t.cdp.send('Target.createTarget', { url: 'about:blank' });
     t.targetId = targetId;
     const { sessionId } = await t.cdp.send('Target.attachToTarget', { targetId, flatten: true });
@@ -293,19 +308,35 @@ class Tab {
     await t.s('CSS.enable');
     await t.s('Network.enable');
     await t.s('Page.addScriptToEvaluateOnNewDocument', { source: PRELUDE });
+    await t.s('Target.setAutoAttach', { autoAttach: true, waitForDebuggerOnStart: true, flatten: true });
     await t.s('Emulation.setDeviceMetricsOverride', { width, height, deviceScaleFactor: scale, mobile: false });
     await t.s('Emulation.setEmulatedMedia', { media: 'screen', features: [{ name: 'prefers-color-scheme', value: theme }] });
     return t;
   }
 
-  s(method, params = {}) {
-    return this.cdp.send(method, params, this.sessionId);
+  s(method, params = {}, sessionId = this.sessionId) {
+    return this.cdp.send(method, params, sessionId);
   }
 
   onEvent(msg) {
-    if (msg.sessionId !== this.sessionId) return;
+    if (msg.sessionId !== this.sessionId && !this.childSessions.has(msg.sessionId)) return;
     const p = msg.params;
-    if (msg.method === 'Runtime.exceptionThrown') {
+    if (msg.method === 'Target.attachedToTarget') {
+      this.childSessions.add(p.sessionId);
+      this.prepareFrame(p.sessionId).catch((e) => this.errors.push(`frame setup failed: ${e.message}`));
+    } else if (msg.method === 'Runtime.executionContextCreated') {
+      this.contexts.set(`${msg.sessionId}:${p.context.id}`, { ...p.context, sessionId: msg.sessionId });
+    } else if (msg.method === 'Runtime.executionContextDestroyed') {
+      this.contexts.delete(`${msg.sessionId}:${p.executionContextId}`);
+    } else if (msg.method === 'Runtime.executionContextsCleared') {
+      for (const [key, ctx] of this.contexts) if (ctx.sessionId === msg.sessionId) this.contexts.delete(key);
+    } else if (msg.method === 'Fetch.requestPaused') {
+      const allowed = p.frameId !== this.printFrameId || (p.request.url === this.printUrl && !this.printNavigated);
+      if (p.frameId === this.printFrameId && allowed) this.printNavigated = true;
+      this.s(allowed ? 'Fetch.continueRequest' : 'Fetch.failRequest', {
+        requestId: p.requestId, ...(!allowed ? { errorReason: 'Aborted' } : {}),
+      }, msg.sessionId).catch((e) => this.errors.push(e.message));
+    } else if (msg.method === 'Runtime.exceptionThrown') {
       const d = p.exceptionDetails;
       this.errors.push(`script error: ${d.exception?.description?.split('\n')[0] ?? d.text}${d.lineNumber != null ? ` (line ${d.lineNumber + 1})` : ''}`);
     } else if (msg.method === 'Runtime.consoleAPICalled' && (p.type === 'error' || p.type === 'assert')) {
@@ -316,14 +347,32 @@ class Tab {
       this.network.get(p.requestId).failed = p.blockedReason || p.errorText || 'failed';
     } else if (msg.method === 'Network.responseReceived' && this.network.has(p.requestId) && p.response.status >= 400) {
       this.network.get(p.requestId).failed = `HTTP ${p.response.status}`;
-    } else if (msg.method === 'Page.loadEventFired' && this.onLoad) {
+    } else if (msg.method === 'Page.loadEventFired' && msg.sessionId === this.sessionId && this.onLoad) {
       this.onLoad();
     } else if (msg.method === 'Page.javascriptDialogOpening') {
-      this.s('Page.handleJavaScriptDialog', { accept: true }).catch(() => {});
+      this.s('Page.handleJavaScriptDialog', { accept: false }, msg.sessionId).catch(() => {});
     }
   }
 
-  async goto(url, { settle = true } = {}) {
+  async prepareFrame(sessionId) {
+    try {
+      for (const domain of ['Page', 'Runtime', 'DOM', 'CSS', 'Network']) await this.s(`${domain}.enable`, {}, sessionId);
+      await this.s('Page.addScriptToEvaluateOnNewDocument', { source: PRELUDE, runImmediately: true }, sessionId);
+      await this.s('Emulation.setEmulatedMedia', { media: 'screen', features: [{ name: 'prefers-color-scheme', value: this.theme }] }, sessionId);
+      await this.s('Target.setAutoAttach', { autoAttach: true, waitForDebuggerOnStart: true, flatten: true }, sessionId);
+    } finally {
+      await this.s('Runtime.runIfWaitingForDebugger', {}, sessionId);
+    }
+  }
+
+  async goto(url, { settle = true, printDocument = false } = {}) {
+    this.artboardContext = null;
+    if (printDocument) {
+      const { frameTree } = await this.s('Page.getFrameTree');
+      this.printFrameId = frameTree.frame.id;
+      this.printUrl = url; this.printNavigated = false;
+      await this.s('Fetch.enable', { patterns: [{ resourceType: 'Document', requestStage: 'Request' }] });
+    }
     let timer;
     const loaded = new Promise((resolve, reject) => {
       this.onLoad = resolve;
@@ -332,11 +381,26 @@ class Tab {
     const r = await this.s('Page.navigate', { url });
     if (r.errorText) { clearTimeout(timer); throw new UserError(`cannot open ${url}: ${r.errorText}`); }
     try { await loaded; } finally { clearTimeout(timer); this.onLoad = null; }
-    if (settle) this.ready = await this.eval(SETTLE_JS);
+    if (printDocument) this.ready = await this.eval(SETTLE_JS);
+    else if (settle) {
+      const { root } = await this.s('DOM.getDocument');
+      const { nodeId } = await this.s('DOM.querySelector', { nodeId: root.nodeId, selector: '#ld-render' });
+      if (!nodeId) throw new UserError('render wrapper has no sandboxed artboard');
+      const { node } = await this.s('DOM.describeNode', { nodeId });
+      const deadline = Date.now() + 10000;
+      while (!this.artboardContext && Date.now() < deadline) {
+        this.artboardContext = [...this.contexts.values()].find((c) => c.auxData?.frameId === node.frameId && c.auxData?.isDefault);
+        if (!this.artboardContext) await sleep(30);
+      }
+      if (!this.artboardContext) throw new UserError('could not attach to the sandboxed artboard');
+      this.ready = await this.eval(SETTLE_JS);
+    }
   }
 
-  async eval(expression) {
-    const r = await this.s('Runtime.evaluate', { expression, awaitPromise: true, returnByValue: true, userGesture: true });
+  async eval(expression, outer = false) {
+    const context = !outer && this.artboardContext;
+    const r = await this.s('Runtime.evaluate', { expression, awaitPromise: true, returnByValue: true, userGesture: true,
+      ...(context ? { contextId: context.id } : {}), timeout: 15000 }, context ? context.sessionId : this.sessionId);
     if (r.exceptionDetails) throw new Error(`in-page: ${r.exceptionDetails.exception?.description ?? r.exceptionDetails.text}`);
     return r.result.value;
   }
@@ -356,6 +420,7 @@ class Tab {
 
   async screenshot(file, height = this.height) {
     await this.eval('window.scrollTo(0, 0)');
+    if (this.artboardContext) await this.eval(`document.getElementById('ld-render').style.height = ${JSON.stringify(`${height}px`)}`, true);
     const { data } = await this.s('Page.captureScreenshot', {
       format: 'png',
       captureBeyondViewport: height > this.height,
@@ -367,6 +432,7 @@ class Tab {
   }
 
   async pdf({ paperWidth, paperHeight, firstPageOnly, preferCSSPageSize }) {
+    if (this.artboardContext || !this.printUrl) throw new UserError('PDF needs a sandboxed print document');
     const { data } = await this.s('Page.printToPDF', {
       printBackground: true, paperWidth, paperHeight,
       marginTop: 0, marginBottom: 0, marginLeft: 0, marginRight: 0,
@@ -451,13 +517,17 @@ class Tab {
     for (const h of d.rawHoles) warnings.push(`unrendered hole in the page text: "${h}"`);
     for (const e of new Set(this.errors)) errors.push(e);
 
-    const { root } = await this.s('DOM.getDocument', { depth: 0 });
-    const { nodeIds } = await this.s('DOM.querySelectorAll', { nodeId: root.nodeId, selector: '[data-ld-font]' });
+    const sessionId = this.artboardContext?.sessionId || this.sessionId;
+    await this.s('DOM.getDocument', { depth: -1, pierce: true }, sessionId);
+    const { result } = await this.s('Runtime.evaluate', { expression: 'document.documentElement', contextId: this.artboardContext?.id }, sessionId);
+    const { nodeId } = await this.s('DOM.requestNode', { objectId: result.objectId }, sessionId);
+    const { nodeIds } = await this.s('DOM.querySelectorAll', { nodeId, selector: '[data-ld-font]' }, sessionId);
+    await this.s('Runtime.releaseObject', { objectId: result.objectId }, sessionId);
     const norm = (s) => s.toLowerCase().replace(/[\s_-]+/g, '');
     for (const nodeId of nodeIds) {
-      const { attributes } = await this.s('DOM.getAttributes', { nodeId });
+      const { attributes } = await this.s('DOM.getAttributes', { nodeId }, sessionId);
       const fam = attributes[attributes.indexOf('data-ld-font') + 1];
-      const { fonts } = await this.s('CSS.getPlatformFontsForNode', { nodeId });
+      const { fonts } = await this.s('CSS.getPlatformFontsForNode', { nodeId }, sessionId);
       const used = fonts.map((f) => f.familyName);
       const faces = d.faces.filter((f) => norm(f.family) === norm(fam));
       if (faces.length) {
@@ -480,20 +550,28 @@ class Tab {
 
 // ------------------------------------------------------------------ canvas access
 
-async function withCanvas(canvasPath, fn) {
+export async function withCanvas(canvasPath, fn) {
+  const { state, title } = readCanvasFile(canvasPath);
+  seedCheck(canvasPath);
   const browser = await launchBrowser();
   const work = fs.mkdtempSync(path.join(os.tmpdir(), 'local-design-boards-'));
+  let printServer;
+  const printDocuments = new Map();
   try {
+    const trustedCanvas = fileInDirectory(work, 'viewer.html');
+    fs.writeFileSync(trustedCanvas, renderCanvas(state, title));
     const viewer = await Tab.open(browser, { width: 1600, height: 1000 });
-    await viewer.goto(pathToFileURL(canvasPath).href, { settle: false });
+    await viewer.goto(pathToFileURL(trustedCanvas).href, { settle: false });
     await viewer.waitFor('window.__ld');
     const info = await viewer.eval('({ title: __ld.title, entry: __ld.entry, pages: __ld.pages, boards: __ld.boards })');
     const pageIndex = new Map(info.pages.map((p, i) => [p.id, i]));
+    const policy = await viewer.eval('document.querySelector(\'meta[http-equiv="Content-Security-Policy"]\').content');
     let lastUnresolved = [];
     info.ordered = [...info.boards].sort((a, b) => (pageIndex.get(a.page) ?? 0) - (pageIndex.get(b.page) ?? 0));
     const ctx = {
       browser,
       info,
+      canvasPath: trustedCanvas,
       pick(names) {
         if (!names.length) return info.ordered;
         return names.map((n) => {
@@ -504,20 +582,47 @@ async function withCanvas(canvasPath, fn) {
         });
       },
       async boardFile(b, tweaks = {}) {
-        const html = await viewer.eval(`__ld.resolve(${JSON.stringify(b.file)}, { standalone: true, tweaks: ${JSON.stringify(tweaks)} })`);
-        const f = path.join(work, b.file);
+        const { html, source } = await viewer.eval(`({html: __ld.resolve(${JSON.stringify(b.file)}, { standalone: true, tweaks: ${JSON.stringify(tweaks)} }), source: __ld.resolve(${JSON.stringify(b.file)}, { tweaks: ${JSON.stringify(tweaks)} })})`);
+        const f = fileInDirectory(work, b.file);
         fs.writeFileSync(f, html);
         // asset references that did not become data: URIs = files that were never seeded
-        const refs = [...html.matchAll(/\s(?:src|href|poster)="(?:\.\/)?([^"{}:]+?\.(?:png|jpe?g|gif|webp|avif|bmp|svg|woff2?|ttf|otf))"/gi),
-          ...html.matchAll(/url\(\s*["']?(?:\.\/)?([^"'(){}:]+?\.(?:png|jpe?g|gif|webp|avif|bmp|svg|woff2?|ttf|otf))["']?\s*\)/gi)];
+        const refs = [...source.matchAll(/\s(?:src|href|poster)="(?:\.\/)?([^"{}:]+?\.(?:png|jpe?g|gif|webp|avif|bmp|svg|woff2?|ttf|otf))"/gi),
+          ...source.matchAll(/url\(\s*["']?(?:\.\/)?([^"'(){}:]+?\.(?:png|jpe?g|gif|webp|avif|bmp|svg|woff2?|ttf|otf))["']?\s*\)/gi)];
         lastUnresolved = [...new Set(refs.map((m) => m[1]))];
         return pathToFileURL(f).href;
+      },
+      async printFile(b, tweaks = {}) {
+        if (!printServer) {
+          // Native print fragmentation is lost inside an iframe. The HTTP header
+          // applies the same sandbox flags to the print document itself.
+          printServer = createServer((req, res) => {
+            const source = printDocuments.get(req.url);
+            res.writeHead(source ? 200 : 404, {
+              'Content-Type': 'text/html; charset=utf-8', 'Cache-Control': 'no-store',
+              'Content-Security-Policy': `${policy}; sandbox allow-scripts allow-forms`,
+            });
+            res.end(source || 'Not found');
+          });
+          await new Promise((resolve, reject) => { printServer.once('error', reject); printServer.listen(0, '127.0.0.1', resolve); });
+        }
+        const route = `/${randomUUID()}`;
+        printDocuments.set(route, await viewer.eval(`__ld.resolve(${JSON.stringify(b.file)}, { tweaks: ${JSON.stringify(tweaks)} })`));
+        return `http://127.0.0.1:${printServer.address().port}${route}`;
+      },
+      async pdf(b, tweaks, options) {
+        const tab = await Tab.open(browser, { width: b.w, height: b.h });
+        try {
+          await tab.goto(await ctx.printFile(b, tweaks), { printDocument: true });
+          if (!tab.ready || tab.errors.length) throw new UserError(`${b.file}: print rendering failed: ${tab.errors.join('; ') || 'runtime not ready'}`);
+          return await tab.pdf(options);
+        } finally { await tab.close(); }
       },
       unresolved: () => lastUnresolved,
     };
     try { return await fn(ctx); } finally { await viewer.close(); }
   } finally {
     await browser.close();
+    if (printServer) { printServer.closeAllConnections(); await new Promise((resolve) => printServer.close(resolve)); }
     fs.rmSync(work, { recursive: true, force: true });
   }
 }
@@ -525,7 +630,7 @@ async function withCanvas(canvasPath, fn) {
 async function shootCanvas(ctx, canvasPath, file, { view = '#fit', width = 1600, height = 1000, scale = 1 } = {}) {
   const tab = await Tab.open(ctx.browser, { width, height, scale });
   try {
-    await tab.goto(pathToFileURL(canvasPath).href + view, { settle: false });
+    await tab.goto(pathToFileURL(ctx.canvasPath).href + view, { settle: false });
     await tab.waitFor('window.__ldReady === true', 30000);
     await sleep(300);
     return await tab.screenshot(file);
@@ -537,6 +642,8 @@ async function shootCanvas(ctx, canvasPath, file, { view = '#fit', width = 1600,
 function lintFirst(canvasPath) {
   try {
     const r = seedCheck(canvasPath);
+    const { html, state, title } = readCanvasFile(canvasPath);
+    if (html !== renderCanvas(state, title)) r.warnings.push('using the current trusted viewer for this check/export; re-seed this canvas before opening or handing it over');
     for (const w of r.warnings) console.log(`warn  ${w}`);
     return r;
   } catch (e) {
@@ -550,8 +657,9 @@ function lintFirst(canvasPath) {
 async function cmdCheck(o) {
   const canvasPath = canvasArg(o);
   const lint = lintFirst(canvasPath);
-  const shots = o.shots || path.join(os.tmpdir(), 'local-design-shots', slug(canvasPath));
-  fs.rmSync(shots, { recursive: true, force: true });
+  const shotsBase = o.shots || path.join(os.tmpdir(), 'local-design-shots', slug(canvasPath));
+  fs.mkdirSync(shotsBase, { recursive: true });
+  const shots = fs.mkdtempSync(path.join(shotsBase, 'check-'));
   const suffix = o.theme === 'dark' ? '-dark' : '';
   let errors = 0;
   let warnings = lint.warnings.length;
@@ -665,52 +773,57 @@ async function cmdExport(o) {
   const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'local-design-pdf-'));
   const parts = [];
   let problems = 0;
-  await withCanvas(canvasPath, async (ctx) => {
-    for (const b of ctx.pick(o.board)) {
-      const tab = await Tab.open(ctx.browser, { width: b.w, height: b.h, scale });
-      try {
-        await tab.goto(await ctx.boardFile(b, o.tweaks));
-        const d = await tab.eval('window.__ldViolations.length');
-        if (d || tab.errors.length) { problems++; console.log(`warn  ${b.file}: has blocked/missing files or script errors - run check`); }
-        if (!o['no-png']) {
-          const h = b.print === 'flow' ? Math.max(b.h, await tab.contentHeight()) : b.h;
-          const f = await tab.screenshot(path.join(outDir, `${stemOf(b.file)}.png`), h);
-          console.log(`png  ${rel(f)}  (${b.w}x${h} @${scale}x)`);
+  try {
+    await withCanvas(canvasPath, async (ctx) => {
+      for (const b of ctx.pick(o.board)) {
+        const tab = await Tab.open(ctx.browser, { width: b.w, height: b.h, scale });
+        try {
+          await tab.goto(await ctx.boardFile(b, o.tweaks));
+          const d = await tab.eval('(window.__ldViolations || []).length');
+          if (d || tab.errors.length) { problems++; console.log(`warn  ${b.file}: has blocked/missing files or script errors - run check`); }
+          if (!o['no-png']) {
+            const h = b.print === 'flow' ? Math.max(b.h, await tab.contentHeight()) : b.h;
+            const f = await tab.screenshot(path.join(outDir, `${stemOf(b.file)}.png`), h);
+            console.log(`png  ${rel(f)}  (${b.w}x${h} @${scale}x)`);
+          }
+          if (!o['no-pdf']) {
+            const flow = b.print === 'flow';
+            const buf = await ctx.pdf(b, o.tweaks, {
+              paperWidth: b.w / 96,
+              paperHeight: (flow ? defaultPageHeight(b.w) : b.h) / 96,
+              firstPageOnly: !flow,
+              preferCSSPageSize: flow,
+            });
+            const part = path.join(tmp, `${String(parts.length).padStart(3, '0')}-${stemOf(b.file)}.pdf`);
+            fs.writeFileSync(part, buf);
+            parts.push(part);
+          }
+        } finally {
+          await tab.close();
         }
-        if (!o['no-pdf']) {
-          const flow = b.print === 'flow';
-          const buf = await tab.pdf({
-            paperWidth: b.w / 96,
-            paperHeight: (flow ? defaultPageHeight(b.w) : b.h) / 96,
-            firstPageOnly: !flow,
-            preferCSSPageSize: flow,
-          });
-          const part = path.join(tmp, `${String(parts.length).padStart(3, '0')}-${stemOf(b.file)}.pdf`);
-          fs.writeFileSync(part, buf);
-          parts.push(part);
-        }
-      } finally {
-        await tab.close();
+      }
+    });
+    if (parts.length) {
+      const out = path.join(outDir, `${slug(canvasPath)}.pdf`);
+      const how = mergePdfs(parts, out);
+      if (how) console.log(`pdf  ${rel(out)}  (${parts.length} artboard(s), joined with ${how})`);
+      else {
+        const pdfDir = path.join(outDir, 'pdf');
+        fs.mkdirSync(pdfDir, { recursive: true });
+        for (const p of parts) fs.copyFileSync(p, path.join(pdfDir, path.basename(p).replace(/^\d+-/, '')));
+        console.log(`warn  no PDF joiner found (PDFKit/qpdf/pdfunite) - one PDF per artboard in ${rel(pdfDir)}`);
       }
     }
-  });
-  if (parts.length) {
-    const out = path.join(outDir, `${slug(canvasPath)}.pdf`);
-    const how = mergePdfs(parts, out);
-    if (how) console.log(`pdf  ${rel(out)}  (${parts.length} artboard(s), joined with ${how})`);
-    else {
-      const pdfDir = path.join(outDir, 'pdf');
-      fs.mkdirSync(pdfDir, { recursive: true });
-      for (const p of parts) fs.copyFileSync(p, path.join(pdfDir, path.basename(p).replace(/^\d+-/, '')));
-      console.log(`warn  no PDF joiner found (PDFKit/qpdf/pdfunite) - one PDF per artboard in ${rel(pdfDir)}`);
-    }
+  } finally {
+    fs.rmSync(tmp, { recursive: true, force: true });
   }
-  fs.rmSync(tmp, { recursive: true, force: true });
   if (problems) process.exitCode = 1;
 }
 
 function cmdOpen(o) {
   const canvasPath = canvasArg(o);
+  const { html, state, title } = readCanvasFile(canvasPath);
+  if (html !== renderCanvas(state, title)) throw new UserError('canvas has an older or modified viewer - extract its sources and re-seed with the current template before opening');
   let url = pathToFileURL(canvasPath).href;
   if (o.view) {
     // macOS LaunchServices drops the #fragment of a file URL, so hand the browser a stub
@@ -764,7 +877,7 @@ async function main() {
   await fn(o);
 }
 
-main().catch((e) => {
+if (process.argv[1] && import.meta.url === pathToFileURL(path.resolve(process.argv[1])).href) main().catch((e) => {
   if (e instanceof UserError) {
     console.error(`error ${e.message}`);
     process.exit(1);

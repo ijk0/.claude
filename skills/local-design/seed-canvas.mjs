@@ -21,7 +21,7 @@ const GENERIC_OUT = new Set(['design.html', 'index.html', 'main.html', 'page.htm
 const GENERIC_TITLE = /^(untitled( design| canvas)?|design( canvas)?|canvas|mockup|my design|new design|test|draft|output|page|main)$/i;
 export const IMAGE_EXT = /\.(png|jpe?g|gif|webp|avif|bmp|svg)$/i;
 export const FONT_EXT = /\.(woff2?|ttf|otf)$/i;
-const BOARD_NAME = /^[A-Za-z0-9][A-Za-z0-9_-]*\.dc\.html$/;
+export const BOARD_NAME = /^[A-Za-z0-9][A-Za-z0-9_-]*\.dc\.html$/;
 const ID = /^[A-Za-z0-9_-]{1,40}$/;
 const MAX_TEXT_ENTRY = 2 * 1024 * 1024;
 const BIG_ASSET = 512 * 1024;
@@ -198,13 +198,40 @@ export function lintCanvas(text, boardNames) {
   return { errors, warnings, canvas: c };
 }
 
+export function validateState(state) {
+  if (!state || !state.files || typeof state.files !== 'object' || Array.isArray(state.files)) {
+    throw new SeedError('the state block must have a "files" record');
+  }
+  const boards = new Set();
+  for (const [name, value] of Object.entries(state.files)) {
+    if (!name || /[/\\\x00-\x1f:]/.test(name) || name.startsWith('.')) {
+      throw new SeedError(`unsafe files entry: ${JSON.stringify(name)} - use a basename, not a path`);
+    }
+    if (typeof value !== 'string') throw new SeedError(`files entry ${name} must be a string`);
+    if (/\.dc\.html$/i.test(name)) {
+      if (!BOARD_NAME.test(name)) throw new SeedError(`invalid artboard name: ${name}`);
+      if (boards.has(name.toLowerCase())) throw new SeedError(`duplicate artboard stem: ${name}`);
+      boards.add(name.toLowerCase());
+    }
+  }
+}
+
+export function fileInDirectory(dir, name) {
+  if (!name || /[/\\\x00-\x1f:]/.test(name) || name.startsWith('.')) {
+    throw new SeedError(`unsafe output name: ${JSON.stringify(name)}`);
+  }
+  const dest = path.resolve(dir, name);
+  if (path.dirname(dest) !== path.resolve(dir)) throw new SeedError(`output escapes its directory: ${name}`);
+  return dest;
+}
+
 export function readCanvasFile(file) {
   const html = fs.readFileSync(file, 'utf8');
   const m = html.match(STATE_RE);
   if (!m) throw new SeedError(`${file} is not a local-design canvas (no appifact-doc state block)`);
   let state;
   try { state = JSON.parse(m[1]); } catch (e) { throw new SeedError(`${file}: the state block does not parse (${e.message})`); }
-  if (!state || typeof state.files !== 'object') throw new SeedError(`${file}: the state block has no "files" record`);
+  validateState(state);
   const title = (html.match(/<title>([\s\S]*?)<\/title>/) || [])[1] || '';
   return { html, state, title: decodeEntities(title) };
 }
@@ -216,6 +243,18 @@ function escapeTitle(t) {
 function scriptSafe(json) {
   // a seeded source can never close the state block
   return json.replace(/</g, '\\u003c').replace(/\u2028/g, '\\u2028').replace(/\u2029/g, '\\u2029');
+}
+
+// Rebuild imported canvases from data only; never execute their outer HTML.
+export function renderCanvas(state, title, template = TEMPLATE) {
+  validateState(state);
+  let html = fs.readFileSync(template, 'utf8');
+  for (const ph of ['__LD_TITLE__', '<!--__LD_README__-->', '__LD_STATE__']) {
+    if (!html.includes(ph)) throw new SeedError(`template is missing the ${ph} placeholder - re-copy payload.template.html`);
+  }
+  return html.replace('__LD_TITLE__', () => escapeTitle(title))
+    .replace('<!--__LD_README__-->', () => README)
+    .replace('__LD_STATE__', () => scriptSafe(JSON.stringify(state)));
 }
 
 export function seed({ template, out, title, artboards, images, fonts, canvas }) {
@@ -281,13 +320,7 @@ export function seed({ template, out, title, artboards, images, fonts, canvas })
     }
   }
 
-  let html = fs.readFileSync(template, 'utf8');
-  for (const ph of ['__LD_TITLE__', '<!--__LD_README__-->', '__LD_STATE__']) {
-    if (!html.includes(ph)) throw new SeedError(`template is missing the ${ph} placeholder - re-copy payload.template.html`);
-  }
-  html = html.replace('__LD_TITLE__', () => escapeTitle(t));
-  html = html.replace('<!--__LD_README__-->', () => README);
-  html = html.replace('__LD_STATE__', () => scriptSafe(JSON.stringify({ v: 1, files })));
+  const html = renderCanvas({ v: 1, files }, t, template);
   fs.mkdirSync(path.dirname(path.resolve(out)), { recursive: true });
   fs.writeFileSync(out, html);
   for (const w of warnings) warn(w);
@@ -308,7 +341,8 @@ export function check(file) {
   for (const b of boards) warnings.push(...lintArtboard(b, state.files[b], boardSet));
   if (own(state.files, 'canvas.json')) {
     const r = lintCanvas(state.files['canvas.json'], boardSet);
-    warnings.push(...r.errors, ...r.warnings);
+    if (r.errors.length) throw new SeedError(`canvas.json refused:\n  ${r.errors.join('\n  ')}`);
+    warnings.push(...r.warnings);
   }
   if (!title.trim()) warnings.push('the page has no title');
   return { title, names, warnings };
@@ -326,7 +360,7 @@ export function extract(file, to) {
   const skipped = [];
   for (const [name, value] of Object.entries(state.files)) {
     if (typeof value !== 'string' || name.includes('/') || name.includes('\\') || name.startsWith('.')) { skipped.push(name); continue; }
-    const dest = path.join(to, name);
+    const dest = fileInDirectory(to, name);
     if (/\.dc\.html$/i.test(name) || name === 'canvas.json') fs.writeFileSync(dest, value, { flag: 'wx' });
     else if (IMAGE_EXT.test(name) || FONT_EXT.test(name)) fs.writeFileSync(dest, Buffer.from(value, 'base64'), { flag: 'wx' });
     else { skipped.push(name); continue; }
