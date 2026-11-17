@@ -1,6 +1,6 @@
 ---
 name: fable-gpt
-description: Fable-GPT orchestration workflow — the main agent (Opus 5.5) only dispatches and adjudicates; Codex (gpt-6-astra) does the work — implementation/debugging/refactoring at xhigh, read-only exploration and audits, cold-read reviews at xhigh (important reviews: astra max + a Sonnet-max reviewer subagent); Claude subagents are otherwise the exception; host gates run from the main session; a Monitor keepalive pings after 290s without a request so the 5-minute prompt cache survives Codex waits. Use when orchestrating multi-agent work; when delegating implementation, debugging, refactoring, or test-fixing to Codex; when launching, resuming, monitoring, or cancelling a codex-companion task; or when the user says use Codex / run a Codex task / Fable-GPT. Also covers program-scale campaigns (scope manifest, risk-ordered waves, wave gates, inventory approval for irreversible steps, docs closeout).
+description: Fable-GPT orchestration workflow — the main agent (Opus 5.5) only dispatches and adjudicates; Codex does the work — implementation/debugging/refactoring on gpt-6.1-sol at max, read-only exploration, audits and cold-read reviews on gpt-6-astra at xhigh (important reviews: astra max + a Sonnet-max reviewer subagent); Claude subagents are otherwise the exception; host gates run from the main session; a Monitor keepalive pings after 290s without a request so the 5-minute prompt cache survives Codex waits. Use when orchestrating multi-agent work; when delegating implementation, debugging, refactoring, or test-fixing to Codex; when launching, resuming, monitoring, or cancelling a codex-companion task; or when the user says use Codex / run a Codex task / Fable-GPT. Also covers program-scale campaigns (scope manifest, risk-ordered waves, wave gates, inventory approval for irreversible steps, docs closeout).
 ---
 
 # Fable-GPT: the main session orchestrates, Codex executes
@@ -11,9 +11,10 @@ session model — switched from Fable 5 on 2026-10-27.)
 Division of labor (user ruling 2026-10-29: few subagents, hand the work to
 Codex): **the main agent (Opus 5.5) only dispatches and decides** — planning,
 architecture calls, task decomposition, dispatching, adjudicating from
-summaries. **Codex (gpt-6-astra) does all the work its sandbox allows** —
-implementation, debugging, test fixing, multi-file refactors, and the
-read-only work too: repo exploration, audits, design and cold-read reviews.
+summaries. **Codex does all the work its sandbox allows** — implementation,
+debugging, test fixing and multi-file refactors on **gpt-6.1-sol at `max`**,
+and the read-only work on **gpt-6-astra**: repo exploration, audits, design
+and cold-read reviews.
 **Claude subagents are the exception** (Orchestration rules): the Sonnet-max
 reviewer as the cross-family leg of important reviews, and host-side work
 that needs multi-step judgment. Host build/test gates run from the main
@@ -41,30 +42,34 @@ high setting, so err upward. Tiering:
 
 | Situation | Model + effort |
 |---|---|
-| Implementation / refactor / test fixing / hard debugging (driver default) | `gpt-6-astra` + `xhigh` (fallback: `gpt-5.6-sol` + `xhigh`) |
-| Read-only exploration, locating, audits, spec extraction | `gpt-6-astra` + `xhigh`, no `--write` |
+| Implementation / refactor / test fixing / hard debugging, fix rounds (driver default with `--write`) | **`gpt-6.1-sol` + `max`** (fallback: `gpt-6.1-sol` + `xhigh`, then `gpt-6-astra` + `xhigh`) |
+| Read-only exploration, locating, audits, spec extraction (driver default without `--write`) | `gpt-6-astra` + `xhigh`, no `--write` |
 | Routine cold-read review (fix rounds, changes with no concurrency, safety or shared-authority surface) | `gpt-6-astra` + `xhigh` (`driver.sh review` default) |
-| **Important review**: design review of a brief (flow step 0), implementation waves touching concurrency / lifecycle / safety / shared authority, the stop-rule re-review, acceptance before an irreversible step | `gpt-6-astra` + **`max`** (`--effort max`); fallback: astra `xhigh`, then `gpt-5.6-sol` + `max`. Diff reviews other than fix rounds also get the Sonnet-max reviewer subagent (flow step 2) |
+| **Important review**: design review of a brief (flow step 0), implementation waves touching concurrency / lifecycle / safety / shared authority, the stop-rule re-review, acceptance before an irreversible step | `gpt-6-astra` + **`max`** (`--effort max`); fallback: astra `xhigh`, then `gpt-6.1-sol` + `max`. Diff reviews other than fix rounds also get the Sonnet-max reviewer subagent (flow step 2) |
 | `ultra` | **never in this workflow** — it spawns Codex-internal parallel subagents, duplicating what Fable-GPT already does at the orchestration layer; one dispatch = one focused task |
 
-**gpt-6-astra is the model for everything Codex does; effort separates routine
-work (`xhigh`) from important reviews (`max`, user ruling 2026-10-29).**
-Adopted for reviews 2026-09-07 (on its release), implementation 2026-10-27.
-`driver.sh run` defaults to `--model gpt-6-astra --effort xhigh`, and
-`driver.sh review` passes the same pair unless given `--effort max`.
-**astra at `max` is not field-checked yet** — the first important review is
-the check: if it fails immediately (HTTP 400 / effort rejected), rerun at
-`xhigh` and record the outcome in this section. If the relay rejects
-`gpt-6-astra` itself, fall back to `gpt-5.6-sol`: `xhigh` for implementation,
-`max` (then `xhigh`) for reviews.
+**The implementer is gpt-6.1-sol at `max` (user ruling 2026-11-17); every
+read-only task — exploration, audits, design and cold-read reviews — stays
+on gpt-6-astra, where effort separates routine work (`xhigh`) from important
+reviews (`max`, user ruling 2026-10-29).** History: astra adopted for reviews
+2026-09-07, for implementation 2026-10-27; implementation moved to
+gpt-6.1-sol max 2026-11-17. `driver.sh run` picks its default from `--write`:
+with it `--model gpt-6.1-sol --effort max`, without it `--model gpt-6-astra
+--effort xhigh`; explicit `--model`/`--effort` always win. `driver.sh review`
+passes astra `xhigh` unless given `--effort max`. Field checks: gpt-6.1-sol
+at `max` answered through the relay on 2026-11-17 (`codex exec` probe); astra
+at `max` is not field-checked yet — the first important review is the check:
+if it fails immediately (HTTP 400 / effort rejected), rerun at `xhigh` and
+record the outcome here. If the relay stops serving a model, fall back per
+the table and record it here.
 
-The implementer and the Codex cold reader are the same model. A fresh thread
-breaks the implementer's reasoning chain and `max` deepens the read where it
-matters, but only a different model family catches the blind spots astra
-shares with itself. So important diff reviews add one cross-family leg: the
-reviewer subagent, pinned to **Sonnet 5.5 at `max` effort** in its
-frontmatter (user ruling 2026-10-29). Routine reviews have no cross-family
-leg.
+Implementer and cold reader are now **different models** (gpt-6.1-sol
+writes, gpt-6-astra reads), so a cold read no longer shares the
+implementer's exact blind spots, and a fresh thread breaks its reasoning
+chain. Both are still GPT family, though, so important diff reviews keep one
+cross-family leg: the reviewer subagent, pinned to **Sonnet 5.5 at `max`
+effort** in its frontmatter (user ruling 2026-10-29). Routine reviews have no
+cross-family leg.
 
 Status (field-checked 2026-08-10 with gpt-5.6-sol; allowlist re-checked
 2026-10-29): **`max` passes the companion** — the allowlist patch is applied
@@ -108,9 +113,10 @@ re-attach with `driver.sh watch`).
      shell state does not persist between calls, so `$task_file` is empty in
      the next call; reference the literal path everywhere;
    - `$CLAUDE_JOB_DIR` may be unset — do not rely on it.
-   - **Keep briefs lean**: gpt-5.6-sol requests over 272K input tokens bill 2×
-     input / 1.5× output *for the entire request* (check astra's long-context
-     pricing before assuming it is exempt). The large window is for Codex's
+   - **Keep briefs lean**: sol-line requests over 272K input tokens billed 2×
+     input / 1.5× output *for the entire request* on gpt-5.6-sol (check
+     gpt-6.1-sol's and astra's long-context pricing before assuming they are
+     exempt). The large window is for Codex's
      own exploration, not for stuffing repo context into the brief.
 
 2. **cd into the target project directory** (the companion tracks tasks by cwd,
@@ -121,8 +127,9 @@ re-attach with `driver.sh watch`).
 cd <project-dir> && ~/.claude/skills/fable-gpt/driver.sh run ~/.claude/fable-gpt/briefs/<project-dir-name>/<timestamp>-<task>.md --write
 ```
 
-   Defaults: `--fresh --model gpt-6-astra --effort xhigh` (override with the
-   same flags; model + effort tiers above). **Pass `--write` explicitly
+   Defaults: `--fresh`, plus `--model gpt-6.1-sol --effort max` when
+   `--write` is given (`gpt-6-astra` + `xhigh` without it); override with the
+   same flags (model + effort tiers above). **Pass `--write` explicitly
    whenever Codex must modify files** — the driver never adds it implicitly.
    `--foreground` restores the old in-process mode (no detached worker) if
    ever needed.
@@ -354,8 +361,8 @@ the checks and go straight to adjudication.
    severity. Fold findings into the brief, then implement. About 15 minutes
    at `xhigh`, longer at `max`; one such review would have replaced seven fix
    rounds plus seven re-reviews in DJI-M4T Wave 8.
-1. **Implementation**: dispatch per the launch path above (`--write`, effort
-   per the tier table). On completion, Read `.reply.md` for the "original
+1. **Implementation**: dispatch per the launch path above (`--write` →
+   gpt-6.1-sol `max` by default). On completion, Read `.reply.md` for the "original
    conclusion".
 2. **Checks — dispatch in parallel** (read-only and independent): the Codex
    cold read and the host gate always; the reviewer subagent as well when
@@ -425,8 +432,8 @@ cd <project-dir> && touch ~/.claude/fable-gpt/briefs/<project-dir-name>/<timesta
    review vehicle.)
 
 3. **Adjudication**: one pass over all verdicts — any blocker →
-   dispatch a Codex fix task (may `--resume` the implementation thread, now
-   with `--write`; verify the resume candidate first), then re-check; all
+   dispatch a Codex fix task (gpt-6.1-sol `max` via `--write`; may `--resume`
+   the implementation thread; verify the resume candidate first), then re-check; all
    green = done. Codex's review verdict is decision input, not a pass stamp —
    "never trust Codex blindly" applies to its self-review too. Filter
    reviewer findings for practicality: an issue only counts (at any severity)
@@ -595,8 +602,8 @@ down:**
 | Task | Dispatch | Model |
 |---|---|---|
 | Orchestration / adjudication / host gates / keepalive | main session itself | Opus 5.5 (session model) |
-| Implementation / refactor / test fixing | Codex `run --write` (= `--model gpt-6-astra --effort xhigh`) | gpt-6-astra xhigh |
-| Exploration / locating / audits / spec extraction | Codex `run`, read-only brief, no `--write` | gpt-6-astra xhigh |
+| Implementation / refactor / test fixing / fix rounds | Codex `run --write` (= `--model gpt-6.1-sol --effort max`) | gpt-6.1-sol max |
+| Exploration / locating / audits / spec extraction | Codex `run`, read-only brief, no `--write` (= `--model gpt-6-astra --effort xhigh`) | gpt-6-astra xhigh |
 | Routine cold-read review | `driver.sh review <impl-brief>` (= `--fresh --model gpt-6-astra --effort xhigh`, no `--write`) | gpt-6-astra xhigh |
 | Important review (flow step 0 design review, concurrency / safety / shared-authority waves, stop-rule re-review, pre-irreversible acceptance) | `driver.sh review <impl-brief> --effort max`; design review: `run <brief> --fresh --effort max`, no `--write` | gpt-6-astra max |
 | Cross-family leg of important diff reviews (not fix rounds or design review) | `subagent_type: reviewer`, no model or effort param | Sonnet 5.5 at `max` (both pinned in frontmatter) |
@@ -674,8 +681,9 @@ target since Claude Code 2.1.219.)
 | `driver.sh review`: "implementer reply not found" | The implementation ran before the `.reply.md` mechanism, or the run failed — pass `--reply <file>` holding the final assistant message (the last `Assistant message` block of `.result.md`) |
 | Second rejection of the same kind on the same subsystem | Stop point fixes — dispatch the full-enumeration task (flow step 3, stop rule) |
 | `--effort max` refused by the driver | Companion allowlist unpatched — run the printed `sed` command once (re-run after plugin updates), or use `xhigh` |
-| Task fails immediately at `max` effort (HTTP 400 from backend) | The relay/backend doesn't support `max` for that model — fall back to `xhigh` (astra) and record it in the tier section; for an important review, `--model gpt-5.6-sol --effort max` is the next option |
-| Task fails immediately with `--model gpt-6-astra` | The relay/backend doesn't serve astra — fall back to gpt-5.6-sol: `driver.sh run ... --model gpt-5.6-sol --effort xhigh` for implementation, `driver.sh review ... --model gpt-5.6-sol --effort max` (then `xhigh`) for reviews |
+| Task fails immediately at `max` effort (HTTP 400 from backend) | The relay/backend doesn't support `max` for that model — fall back to `xhigh` (astra) and record it in the tier section; for an important review, `--model gpt-6.1-sol --effort max` is the next option |
+| Implementation task fails immediately on gpt-6.1-sol | `max` rejected → rerun with `--effort xhigh`; model rejected → `--model gpt-6-astra --effort xhigh`. Record the outcome in the tier section |
+| Task fails immediately with `--model gpt-6-astra` | The relay/backend doesn't serve astra — reviews and read-only work fall back to `--model gpt-6.1-sol` (`max`, then `xhigh`) |
 | Codex hits Gradle `SocketException: Operation not permitted` | Sandbox forbids loopback — expected. Codex compiles and tests with the direct toolchain (self-check clause); the host gate (main-session background shell) runs the build tool |
 | Codex finished but no files changed | `--write` was missing. Write a small brief saying "apply the changes", then `driver.sh run <that-file> --resume --write` to continue the thread |
 | `status` can't find a just-launched task | Wrong cwd — return to the project directory the task was launched from |

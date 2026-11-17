@@ -19,8 +19,11 @@
 #                                    # listed task's run has finished
 #   driver.sh <subcommand> [...]   # passthrough: status / result / cancel / task-resume-candidate ...
 #
-# run defaults: --fresh --model gpt-6-astra --effort xhigh (fallback if the relay
-#   rejects astra: --model gpt-5.6-sol --effort xhigh)
+# run defaults: --fresh, plus a model/effort pair chosen by --write:
+#   with --write (implementation, fix rounds) → --model gpt-6.1-sol --effort max
+#     (fallback: gpt-6.1-sol xhigh, then gpt-6-astra xhigh)
+#   without --write (exploration, audits, reviews) → --model gpt-6-astra --effort xhigh
+#   An explicit --model/--effort always wins; each is defaulted independently.
 # effort: none|minimal|low|medium|high|xhigh — plus max/ultra IF the installed
 #   companion accepts them (codex-cli >= 0.147 does; companion 1.0.6 stops at
 #   xhigh — the driver detects this and refuses max/ultra with instructions
@@ -304,8 +307,13 @@ if [[ "$1" == "run" ]]; then
     fi
   done
   joined=" ${flags[*]} "
-  [[ "$joined" == *" --model"*  ]] || flags+=(--model gpt-6-astra)
-  [[ "$joined" == *" --effort"* ]] || flags+=(--effort xhigh)
+  if [[ "$joined" == *" --write "* ]]; then
+    default_model=gpt-6.1-sol; default_effort=max     # implementer
+  else
+    default_model=gpt-6-astra; default_effort=xhigh   # read-only work
+  fi
+  [[ "$joined" == *" --model"*  ]] || flags+=(--model "$default_model")
+  [[ "$joined" == *" --effort"* ]] || flags+=(--effort "$default_effort")
   [[ "$joined" == *" --resume"* || "$joined" == *" --fresh "* ]] || flags+=(--fresh)
   effort_value=""
   prev=""
